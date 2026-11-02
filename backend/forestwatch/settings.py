@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+FRONTEND_DIR = BASE_DIR.parent / 'frontend'
 DEBUG = os.getenv('DJANGO_DEBUG', '1') == '1'
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'local-demo-only-change-before-deployment')
 if not DEBUG and SECRET_KEY == 'local-demo-only-change-before-deployment':
@@ -14,7 +15,7 @@ MIDDLEWARE = ['django.middleware.security.SecurityMiddleware', 'django.contrib.s
               'django.contrib.auth.middleware.AuthenticationMiddleware', 'django.contrib.messages.middleware.MessageMiddleware',
               'django.middleware.clickjacking.XFrameOptionsMiddleware']
 ROOT_URLCONF = 'forestwatch.urls'
-TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates', 'DIRS': [BASE_DIR / 'templates'],
+TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates', 'DIRS': [FRONTEND_DIR / 'templates'],
               'APP_DIRS': True, 'OPTIONS': {'context_processors': ['django.template.context_processors.request',
               'django.contrib.auth.context_processors.auth', 'django.contrib.messages.context_processors.messages']}}]
 WSGI_APPLICATION = 'forestwatch.wsgi.application'
@@ -26,7 +27,7 @@ TIME_ZONE = os.getenv('TIME_ZONE', 'Asia/Ho_Chi_Minh')
 USE_I18N = True
 USE_TZ = True
 STATIC_URL = '/static/'
-STATICFILES_DIRS = [BASE_DIR / 'static']
+STATICFILES_DIRS = [FRONTEND_DIR / 'static']
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 # Evidence is served by an authenticated view, not a public media directory.
 MEDIA_ROOT = BASE_DIR / 'media'

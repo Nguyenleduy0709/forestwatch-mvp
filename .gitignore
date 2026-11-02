@@ -6,8 +6,8 @@ db.sqlite3
 db.sqlite3-*
 media/
 staticfiles/
-weights/*
-!weights/.gitkeep
+backend/weights/*
+!backend/weights/.gitkeep
 .env
 node_modules/
 *.log
