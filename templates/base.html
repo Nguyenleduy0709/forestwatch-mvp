@@ -1,0 +1,11 @@
+{% load static %}<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="ForestWatch — giám sát rừng, phát hiện dấu hiệu khói và xác minh cảnh báo.">
+<title>{% block title %}ForestWatch — Giữ màu xanh cho rừng{% endblock %}</title>
+<link rel="stylesheet" href="{% static 'css/app.css' %}"><script src="{% static 'js/app.js' %}" defer></script></head>
+<body><header class="header"><a class="brand" href="{% url 'home' %}"><span class="brand-icon">♧</span>Forest<span>Watch</span><small>FOREST INTELLIGENCE</small></a>
+<nav aria-label="Điều hướng chính"><a href="{% url 'home' %}">Trang chủ</a><a href="{% url 'dashboard' %}">Giám sát</a><a href="{% url 'alerts' %}">Cảnh báo</a></nav>
+{% if user.is_authenticated %}<form method="post" action="{% url 'logout' %}" class="account">{% csrf_token %}<span>{{ user.username }}</span><button class="text-button">Đăng xuất ↗</button></form>{% else %}<a class="button small" href="{% url 'login' %}">Vào hệ thống ↗</a>{% endif %}</header>
+{% if messages %}<div class="messages" role="status">{% for message in messages %}<p>{{ message }}</p>{% endfor %}</div>{% endif %}
+{% block content %}{% endblock %}
+<footer><a class="brand footer-brand" href="{% url 'home' %}">ForestWatch</a><span>Quan sát sớm. Xác minh kỹ. Bảo vệ rừng.</span><span>Đồ án MVP · {% now 'Y' %}</span></footer></body></html>
