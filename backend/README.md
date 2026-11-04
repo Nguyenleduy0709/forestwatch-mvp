@@ -50,7 +50,7 @@ Các route nghiệp vụ yêu cầu đăng nhập; POST dùng CSRF. Upload thàn
 - SQLite được tạo tại `backend/db.sqlite3`, ảnh tại `backend/media/`; không kèm trong ZIP hoặc Git.
 - Một lần phân tích lưu một Analysis; chỉ tạo Alert khi có phát hiện.
 - Trạng thái: PENDING → CONFIRMED → RESOLVED, hoặc PENDING → REJECTED. Lưu lịch sử và người thao tác.
-- `.env.example` là mẫu tham khảo; hiện ứng dụng đọc biến môi trường của shell, không tự tải `.env`.
+- [`.env.example` ở gốc repo](../.env.example) là mẫu tham khảo; hiện ứng dụng đọc biến môi trường của shell, không tự tải `.env`.
 - Model được giữ trong bộ nhớ; phải khởi động lại khi thay `best.pt`.
 - MVP xử lý đồng bộ một ảnh mỗi yêu cầu. Video, stream và nhiều người dùng cần worker/hàng đợi sau này.
 - `runserver` chỉ dùng phát triển. Triển khai công khai cần DEBUG=0, secret riêng, HTTPS và cấu hình static/media phù hợp.

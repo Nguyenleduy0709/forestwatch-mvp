@@ -1,104 +1,95 @@
-# ForestWatch 🌲
+# ForestWatch
 
-**MVP web giám sát rừng và xác minh cảnh báo khói**, xây bằng Django, HTML/CSS và TypeScript. Giao diện xanh rừng, ảnh toàn cảnh, tối ưu cho buổi demo nhóm.
+Ứng dụng Django giám sát ảnh rừng: đăng nhập, dashboard, tải ảnh, phân đoạn khói bằng FoSp, xem ảnh gốc/mặt nạ và xác minh cảnh báo. Frontend dùng Django templates, CSS và TypeScript; một server Django phục vụ toàn bộ web, chưa có SPA hay API riêng.
 
-![Trang chủ ForestWatch](docs/home.jpg)
+MVP xử lý **ảnh tĩnh, đồng bộ từng yêu cầu**. Chưa có camera trực tiếp, video, bản đồ hay thông báo thời gian thực. Demo mô phỏng do người dùng chọn, không chạy AI. Kết quả model cần người xác minh, không phải kết luận hiện trường an toàn hoặc có cháy. Không dùng `runserver` để triển khai công khai.
 
-## Cấu trúc repository
+![Giao diện](docs/home.jpg)
+
+## Cấu trúc
 
 ```text
-forestwatch-mvp/
-├── backend/                 Django và xử lý AI
+D:\ForestWatch\
+├── backend/                 Django, nghiệp vụ, inference và tests
 │   ├── forestwatch/         Settings, URL, WSGI
-│   ├── monitor/             Upload, models, views, inference, tests
-│   ├── weights/             Đặt best.pt tự train (không commit)
-│   ├── manage.py
-│   └── requirements*.txt
-├── frontend/                Giao diện
-│   ├── templates/           HTML templates được Django render
-│   ├── src/app.ts           TypeScript
-│   ├── static/              CSS, JS đã build, ảnh rừng
-│   └── package.json
-├── notebooks/               Recipe train Kaggle và gắn model
-├── docs/                    Hướng dẫn, prompt Codex, kiểm tra
-└── .github/workflows/       Tự động kiểm tra backend và frontend
+│   ├── monitor/             Đăng nhập, upload, Analysis/Alert, migration
+│   ├── weights/             Chỗ đặt model riêng, không commit
+│   └── manage.py
+├── frontend/
+│   ├── templates/           HTML được Django render
+│   ├── src/app.ts           TypeScript nguồn
+│   └── static/              CSS, ảnh và JS đã build
+├── notebooks/               Notebook/script tiếp tục train FoSp
+├── scripts/                 Kiểm tra dự án và FoSp web thật
+├── docs/                    Kiến trúc, kết quả, tài nguyên và xác minh
+├── .github/                 CI, mẫu PR, mẫu báo lỗi
+├── .env.example             Mẫu biến môi trường, không chứa secret
+├── CONTRIBUTING.md          Quy trình nhánh, PR, review và conflict
+└── README.md
 ```
 
-**Backend đã có sẵn**, không cần viết lại: xem [backend/README.md](backend/README.md).
-Hai phần được tách theo thư mục; Django phục vụ cả HTML và xử lý phía máy chủ nên chỉ cần chạy một server.
+Trên máy hiện tại, `checkpoints/`, `outputs/`, `work/`, ZIP và log di chuyển là tài nguyên **cục bộ được Git bỏ qua**. Bản repo cũ tại `outputs/forestwatch-mvp` được giữ nguyên; làm việc mới ở gốc `D:\ForestWatch`. Không commit hoặc xóa chúng. Model, thuật toán FoSp, ngưỡng 0,4 và notebook train được giữ nguyên.
 
-| Tài liệu | Nội dung |
-| --- | --- |
-| [Backend](backend/README.md) | Luồng xử lý, database và route |
-| [Frontend](frontend/README.md) | Bố cục dọc và cách sửa giao diện |
-| [Kaggle → web](notebooks/README.md) | Train YOLO, tải best.pt, bật suy luận thật |
-| [Prompt cho Codex](docs/CODEX_PROMPT.md) | Copy sau khi giải nén ZIP trên máy bạn |
-| [Kiểm tra](docs/VALIDATION.md) | Những gì đã xác minh và giới hạn |
+## Cài và chạy trên Windows PowerShell
 
-## Chạy được những gì?
-
-- Đăng nhập bằng tài khoản Django; dữ liệu mỗi người được tách biệt.
-- Tải ảnh JPG/PNG/WebP, kiểm tra định dạng/kích thước, bỏ metadata và chuẩn hóa ảnh.
-- Chế độ **demo**: người dùng chủ động chọn tình huống có/không có phát hiện. **Không chạy AI**, không tạo điểm tin cậy giả.
-- Chế độ **yolo**: chạy model detection đã fine-tune có nhãn smoke/fire và vẽ khung thật.
-- Chế độ **fosp** chạy phân đoạn khói bằng checkpoint FoSp SMOKE5K, tô mặt nạ lên ảnh và hiển thị tỷ lệ diện tích khói.
-- Một lần phân tích có đối tượng tạo một cảnh báo kèm ảnh bằng chứng.
-- Xác nhận/từ chối, đóng sự kiện đã xác nhận; lưu người thực hiện, thời gian và ghi chú.
-- Bố cục dọc theo phác thảo: ảnh ở trên, nguồn ảnh/thời gian/số vùng/trạng thái ở dưới, tiếp theo là xác minh và lịch sử.
-- Lịch sử và bộ lọc trạng thái; xem lại ảnh gốc/kết quả.
-- Ảnh bằng chứng chỉ truy cập được sau đăng nhập và kiểm tra chủ sở hữu.
-
-**Phạm vi.** MVP phân tích ảnh tĩnh, chạy trên máy để trình diễn. Các phần camera trực tiếp, video, bản đồ, cảnh báo theo chuỗi thời gian và dự báo theo thời tiết nằm trong lộ trình tiếp theo.
-
-## 1. Khởi động nhanh — không cần GPU
-
-Cần Python 3.11 hoặc 3.12 và kết nối mạng ở lần cài thư viện đầu tiên.
-
-### Windows PowerShell
+Cần Git, Python 3.12 (hoặc 3.11 cho demo), Node.js 22 nếu sửa frontend. Với máy mới:
 
 ```powershell
+git clone https://github.com/Nguyenleduy0709/forestwatch-mvp.git D:\ForestWatch
+Set-Location D:\ForestWatch
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt
+```
+
+Trên máy đã có repo ở `D:\ForestWatch`, chỉ `Set-Location` vào đó, **không clone chồng lên dữ liệu**. Có thể dùng môi trường sẵn có `D:\ForestWatch\work\venv\Scripts\python.exe` thay `.\.venv\Scripts\python.exe` trong mọi lệnh bên dưới.
+
+Xem [`.env.example`](.env.example) để biết biến hỗ trợ. Có thể sao chép thành `.env` làm ghi chú riêng, nhưng ứng dụng **không tự nạp `.env`**: đặt biến trong cùng cửa sổ PowerShell trước khi chạy. Không commit `.env` hoặc secret.
+
+```powershell
+$env:DJANGO_DEBUG = '1'
+$env:DJANGO_ALLOWED_HOSTS = 'localhost,127.0.0.1'
+$env:INFERENCE_MODE = 'demo'
 .\.venv\Scripts\python.exe backend/manage.py migrate
 .\.venv\Scripts\python.exe backend/manage.py createsuperuser
-.\.venv\Scripts\python.exe backend/manage.py runserver
+.\.venv\Scripts\python.exe backend/manage.py runserver 127.0.0.1:8000
 ```
 
-### macOS / Linux
+Mở http://127.0.0.1:8000, đăng nhập bằng tài khoản vừa tạo. Không có tài khoản/mật khẩu mặc định. SQLite mặc định tại `backend/db.sqlite3`, ảnh tại `backend/media/`; không đưa vào Git. Nếu muốn dùng database cũ trên máy này, đặt đường dẫn **trước migrate và chạy web**:
 
-```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -r backend/requirements.txt
-.venv/bin/python backend/manage.py migrate
-.venv/bin/python backend/manage.py createsuperuser
-.venv/bin/python backend/manage.py runserver
+```powershell
+$env:DATABASE_PATH = 'D:\ForestWatch\outputs\forestwatch-mvp\backend\db.sqlite3'
 ```
 
-Mở **http://127.0.0.1:8000**, đăng nhập bằng tài khoản vừa tạo. Không có mật khẩu mặc định. TypeScript đã được biên dịch và lưu sẵn trong `frontend/static/js/app.js`; **không cần Node.js để chạy demo**.
+Database cũ lưu đường dẫn ảnh tương đối với media cũ. Để dùng cả tài khoản, lịch sử và bằng chứng cũ, cấu hình thêm:
 
-Mặc định `INFERENCE_MODE=demo`. Không cần tải dataset hay model để thử quy trình web. Ảnh rừng đã có tại `frontend/static/img/forest.jpg`, có thể chọn ảnh này cho buổi demo.
+```powershell
+$env:MEDIA_ROOT = 'D:\ForestWatch\outputs\forestwatch-mvp\backend\media'
+```
 
-## 2. Kịch bản trình diễn 3 phút
+### Chế độ demo
 
-1. Giới thiệu trang chủ, chọn **Mở trung tâm giám sát**, đăng nhập.
-2. Chọn ảnh rừng, tích **Mô phỏng phát hiện khói**, bấm chạy.
-3. Chỉ rõ banner mô phỏng: vùng khung là dựng sẵn, không phải AI nhận diện.
-4. Chuyển qua ảnh gốc/kết quả, nhập ghi chú và **Xác nhận**.
-5. Bấm **Đánh dấu đã xử lý**, xem lịch sử thay đổi.
-6. Tải ảnh lần nữa, bỏ tích ô mô phỏng: lần này không sinh cảnh báo.
-7. Mở trang **Cảnh báo**, lọc trạng thái và xem lại bằng chứng.
+Không cần PyTorch, GPU hay checkpoint. Dùng ảnh `frontend/static/img/forest.jpg`, tick mô phỏng khói rồi upload. Xem ảnh gốc/kết quả, xác nhận cảnh báo, đánh dấu đã xử lý và xem lịch sử. Upload lần nữa không tick mô phỏng để kiểm tra trường hợp không có cảnh báo. Khung demo và nhãn mô phỏng được hiển thị rõ.
 
-Nếu có trọng số hợp lệ, dùng hướng dẫn dưới để trình diễn kết quả AI thật.
+### Chế độ FoSp thật trên máy hiện tại
 
-## 3. Chạy FoSp hoặc YOLO
+Máy này đã có môi trường CUDA, runtime và checkpoint; không cần sao chép model:
 
-### FoSp phân đoạn khói
+```powershell
+Set-Location D:\ForestWatch
+$env:INFERENCE_MODE = 'fosp'
+$env:FOSP_MODEL_PATH = 'D:\ForestWatch\checkpoints\fosp_smoke5k_14000\best.pth'
+$env:FOSP_RUNTIME_DIR = 'D:\ForestWatch\outputs\forestwatch-mvp\.fosp-runtime'
+# Thêm DATABASE_PATH và MEDIA_ROOT như trên nếu muốn dùng dữ liệu cũ.
+.\work\venv\Scripts\python.exe backend/manage.py migrate
+# Chỉ cần tạo tài khoản nếu database đang dùng chưa có tài khoản.
+.\work\venv\Scripts\python.exe backend/manage.py runserver 127.0.0.1:8000 --noreload
+```
 
-Web chạy FoSp MiT-B3 và tô màu cam lên các pixel nhận diện là khói. Checkpoint tại update 14.000 được chọn bằng F1 trên 468 ảnh validation SMOKE5K. Trên 400 ảnh test giữ riêng, F1 trung bình theo ảnh là **76,88%**, IoU là **68,24%**, precision là **80,86%** và recall là **77,53%**. Ngưỡng tạo mặt nạ là 0,4. So với bản 10.000, F1 tăng 0,87 điểm phần trăm. Xem số liệu đầy đủ trong [kết quả đánh giá](docs/fosp_smoke5k_14000.json).
+Nếu thiếu tài khoản: chạy `backend/manage.py createsuperuser` bằng cùng Python và cùng biến môi trường. Đổi model cần khởi động lại server. Thiếu model/thư viện hoặc lỗi suy luận sẽ báo lỗi, không tự chuyển sang demo.
 
-Trong [Kaggle Output](https://www.kaggle.com/code/nguynlduyb24dckh043/notebook32e4daa033/output) của Version 4, tải `forestwatch_fosp_14000.zip` hoặc mở thư mục `fosp_smoke5k_14000`. Đặt `best.pth` vào `backend/weights/fosp_best.pth`. Trọng số được lưu riêng trên Kaggle. Web cần GPU NVIDIA và PyTorch CUDA.
+### Cài FoSp trên máy mới có GPU NVIDIA
 
-Ví dụ cho Windows với Python 3.12 và RTX 5070, chạy từ thư mục repo sau khi tạo `.venv` và migrate database:
+Dùng Python 3.12; cài backend và migrate như trên. Cấu hình dưới đây giữ phiên bản runtime đã dùng cho model hiện tại (PyTorch CUDA 12.8, đã thử trên RTX 5070):
 
 ```powershell
 git -c core.symlinks=false clone https://github.com/LujianYao/FoSp.git .fosp-runtime/FoSp
@@ -107,95 +98,68 @@ git clone --branch v1.6.2 --depth 1 https://github.com/open-mmlab/mmcv.git .fosp
 .\.venv\Scripts\python.exe -m pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
 .\.venv\Scripts\python.exe -m pip install -r backend/requirements-fosp.txt
 $env:INFERENCE_MODE = 'fosp'
-.\.venv\Scripts\python.exe backend/manage.py runserver --noreload
+$env:FOSP_MODEL_PATH = 'D:\ForestWatch\backend\weights\fosp_best.pth'
+$env:FOSP_RUNTIME_DIR = 'D:\ForestWatch\.fosp-runtime'
+.\.venv\Scripts\python.exe backend/manage.py runserver 127.0.0.1:8000 --noreload
 ```
 
-Có thể đặt `FOSP_MODEL_PATH` để trỏ đến trọng số khác và `FOSP_RUNTIME_DIR` để chọn thư mục chứa mã nguồn. Sau khi thay trọng số, khởi động lại web.
+Đặt checkpoint `best.pth` đáng tin cậy vào đường dẫn `FOSP_MODEL_PATH`, hoặc trỏ biến đến vị trí có sẵn. Không tải checkpoint vào Git. Runtime phải chứa cả `FoSp/` và `mmcv/`. Web FoSp hiện yêu cầu CUDA, chưa có đường chạy CPU. [Số liệu checkpoint 14.000](docs/fosp_smoke5k_14000.json): F1 trung bình theo ảnh 76,88%, IoU 68,24% trên 400 ảnh test SMOKE5K; không suy rộng thành độ chính xác mọi hiện trường.
 
-**Lưu để train tiếp.** Giữ `last.pth` (trọng số, optimizer và trạng thái ngẫu nhiên), `best.pth`, `manifest.json` (giữ nguyên nội dung), `run_config.json` và `results_14000.json` từ cùng thư mục Kaggle. Dùng [notebook nối tiếp 14.000](notebooks/fosp_continue.ipynb), gắn Output Version 4 vào Input rồi bật GPU và Internet. Notebook kiểm tra checkpoint 14.000 trước khi chạy. Lịch gốc được giữ ở `--max-updates 40000 --micro-batch 2 --accumulate 3`. Script trong ZIP cũ có giới hạn dừng 14.000, vì vậy lượt tiếp theo dùng script được notebook này chuẩn bị. Các đường dẫn dữ liệu thuộc môi trường Kaggle, chạy trên Windows cần điều chỉnh cách đọc đường dẫn và kiểm tra bộ nhớ GPU.
+Giữ nguyên `last.pth`, `best.pth`, `manifest.json`, `run_config.json`, kết quả và mã train cùng đợt trong ổ D để tiếp tục train. `last.pth` chứa optimizer/trạng thái train; không thay bằng `best.pth` khi resume. Xem [hướng dẫn notebook](notebooks/README.md) và [notebook tiếp tục FoSp](notebooks/fosp_continue.ipynb). Không thay tập chia dữ liệu hoặc lịch train khi chỉ tái cấu trúc web.
 
-### YOLO phát hiện bằng khung
+Chế độ YOLO đã có vẫn được giữ: cài `backend/requirements-ai.txt`, đặt `INFERENCE_MODE=yolo`, `MODEL_PATH` là đường dẫn tuyệt đối đến model detection đã train smoke/fire, `MODEL_CONFIDENCE=0.35`. Đây là tùy chọn riêng, không thay FoSp.
 
-Cài thêm thư viện và đặt file trọng số **đã huấn luyện nhận diện khói** tại `backend/weights/best.pt`. File này không được kèm ZIP/repo. Không dùng `yolo11n.pt`/COCO mặc định rồi coi đó là model khói. MVP hỗ trợ model object detection có nhãn `smoke`, `fire`, `khói`, `lửa`, `khoi`, `lua`.
+## Sửa frontend
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r backend/requirements-ai.txt
-$env:INFERENCE_MODE = 'yolo'
-$env:MODEL_PATH = (Resolve-Path '.\backend\weights\best.pt').Path
-$env:MODEL_CONFIDENCE = '0.35'
-.\.venv\Scripts\python.exe backend/manage.py runserver --noreload
+npm.cmd --prefix frontend ci
+npm.cmd --prefix frontend run check
+npm.cmd --prefix frontend run build
 ```
 
-macOS/Linux: `INFERENCE_MODE=yolo MODEL_PATH="$PWD/backend/weights/best.pt" .venv/bin/python backend/manage.py runserver --noreload`.
+Commit cả TypeScript và JS đã build. JS có sẵn trong repo nên chạy demo không cần Node. CSS/templates sửa trực tiếp rồi tải lại Django; không có `npm start` hay server frontend riêng. Font ngoài mạng là tùy chọn, có font hệ thống dự phòng.
 
-- Khởi động lại khi thay trọng số; model được giữ trong bộ nhớ sau lần tải đầu.
-- Nếu thiếu model/thư viện hoặc lỗi suy luận, web báo lỗi; **không tự chuyển sang mô phỏng**.
-- Ngưỡng 0.35 chỉ là điểm khởi đầu để thử, cần chọn theo validation thực tế.
-- Điểm model không đồng nghĩa xác suất cháy. Không phát hiện không đồng nghĩa an toàn.
-- Pyro-SDIS có một lớp khói. Web hỗ trợ nhãn lửa nếu model có lớp lửa; nó không tự tạo năng lực nhận diện lửa cho model chỉ học khói.
-- Chỉ nạp `.pt` từ nguồn bạn tin cậy. Kiểm tra license của Ultralytics và trọng số trước khi phân phối/sử dụng thương mại.
+## Kiểm tra
 
-Repo có [recipe huấn luyện YOLO trên Kaggle](notebooks/README.md) để copy vào notebook. Khi đánh giá YOLO, giữ test độc lập theo camera hoặc chuỗi ảnh nếu có thể và báo precision, recall, mAP.
-
-## 4. Sửa giao diện
-
-```bash
-npm --prefix frontend ci
-npm --prefix frontend run check
-npm --prefix frontend run build
-```
-
-- HTML: `frontend/templates/`
-- CSS: `frontend/static/css/app.css`
-- TypeScript: `frontend/src/app.ts`
-- JavaScript được tạo: `frontend/static/js/app.js`
-- Ảnh đầu trang: `frontend/static/img/forest.jpg`
-
-Google Fonts là tùy chọn: không có mạng thì dùng font hệ thống. Ảnh rừng được lưu sẵn nên demo không phụ thuộc tải ảnh từ Internet.
-
-## 5. Kiểm tra
+Chạy toàn bộ backend + frontend, không cần GPU hoặc model:
 
 ```powershell
+.\scripts\check.ps1
+# Môi trường hiện có trên máy này:
+.\scripts\check.ps1 -Python .\work\venv\Scripts\python.exe
+```
+
+Nếu PowerShell chặn script, có thể chạy các lệnh tương đương:
+
+```powershell
+$env:INFERENCE_MODE = 'demo'
 .\.venv\Scripts\python.exe backend/manage.py check
+.\.venv\Scripts\python.exe backend/manage.py makemigrations --check --dry-run
 Push-Location backend
-..\.venv\Scripts\python.exe manage.py test monitor
+..\.venv\Scripts\python.exe manage.py test monitor --noinput
 Pop-Location
+.\.venv\Scripts\python.exe scripts/check_demo_web.py
+npm.cmd --prefix frontend ci
+npm.cmd --prefix frontend run check
+npm.cmd --prefix frontend run build
+git diff --exit-code -- frontend/static/js/app.js
+.\.venv\Scripts\python.exe backend/manage.py collectstatic --noinput
 ```
 
-Test bao gồm: luồng mô phỏng có/không có cảnh báo, lịch sử trạng thái, chống cập nhật sai trạng thái, quyền sở hữu ảnh/cảnh báo, yêu cầu đăng nhập, CSRF, ảnh không hợp lệ, thiếu model không fallback và adapter YOLO với kết quả giả lập. Test adapter không chứng minh model thật chính xác.
+Test kiểm tra đăng nhập, dashboard, upload, cảnh báo/lịch sử, phân quyền bằng chứng, CSRF, ảnh lỗi và dispatch FoSp/YOLO. Các test adapter dùng kết quả giả lập, không đánh giá độ chính xác AI. `scripts/check_demo_web.py` kiểm tra luồng demo qua server HTTP thật với database/media tạm. CI chạy backend trên Windows/Linux và frontend trên Linux, chỉ cài `backend/requirements.txt` và TypeScript.
 
-Database và ảnh được tạo tại `backend/db.sqlite3`, `backend/media/`, không đưa vào Git. `backend/.env.example` chỉ là tài liệu mẫu; ứng dụng đọc biến môi trường của shell, **không tự tải file .env**.
+Kiểm tra web FoSp thật (ngoài CI), sau khi đặt `FOSP_MODEL_PATH` và `FOSP_RUNTIME_DIR`:
 
-## Kiến trúc MVP
-
-```mermaid
-flowchart LR
- A[Trình duyệt] --> B[Django: đăng nhập và upload]
- B --> C{Chế độ}
- C --> D[Mô phỏng có ghi nhãn]
- C --> E[YOLO + trọng số của bạn]
- C --> S[FoSp + checkpoint SMOKE5K]
- D --> F[Ảnh kết quả + dữ liệu phân tích]
- E --> F
- S --> F
- F --> G[SQLite + file bằng chứng]
- G --> H[Xác minh và lịch sử cảnh báo]
+```powershell
+.\work\venv\Scripts\python.exe scripts/check_fosp_web.py --image <duong-dan-anh-khoi-goc>
 ```
 
-MVP suy luận đồng bộ một ảnh mỗi yêu cầu để dễ chạy tối nay. Khi thêm video hoặc nhiều người dùng, tách suy luận sang worker có hàng đợi, giới hạn dung lượng và tần suất, xử lý timeout; không chạy vòng lặp video trong request Django. Không dùng `runserver` cho môi trường công khai. Trước triển khai cần thiết lập secret riêng, DEBUG=0, HTTPS, static/media storage và cấu hình vận hành phù hợp.
+Nên chọn ảnh khói gốc, không phải ảnh đã tô màu. Script dùng SQLite trong RAM và media tạm dưới `work/`, không ghi vào database/ảnh người dùng; kiểm tra upload, ảnh mặt nạ, trang kết quả và cảnh báo nếu có khói. Xem [biên bản tái cấu trúc](docs/RESTRUCTURING.md) để biết kiểm tra thực tế và giới hạn.
 
-## Lộ trình sau buổi demo
+## Làm việc nhóm và tài liệu
 
-1. Gắn và đánh giá model khói thật, chọn ngưỡng validation.
-2. Worker đọc video, lấy mẫu khung hình; xét nhiều lần quan sát và chống cảnh báo trùng.
-3. Quản lý camera, bản đồ vị trí camera, dashboard thống kê.
-4. Phân tích các lỗi của FoSp trên khói mỏng, mây và sương để chọn dữ liệu bổ sung.
+Dùng `main` ổn định, nhánh `feature/<ten-chuc-nang>` hoặc `fix/<ten-loi>`, PR và review theo [CONTRIBUTING.md](CONTRIBUTING.md). Không tạo `develop` khi chưa có nhu cầu phát hành riêng. Bảo vệ main là đề xuất chờ quản trị viên xác nhận.
 
-## Tài nguyên và ghi công
-
-- Django: https://www.djangoproject.com/
-- Ultralytics: https://docs.ultralytics.com/
-- Pyro-SDIS: https://huggingface.co/datasets/pyronear/pyro-sdis
-- Ảnh rừng: Unsplash, ảnh `photo-1448375240586-882707db888b`; xem `docs/ASSETS.md`. Ảnh và font giữ license của tác giả, không thuộc license code.
-
-Code dự án được cấp phép MIT, xem `LICENSE`.
+- [Backend và các route](backend/README.md), [Frontend](frontend/README.md).
+- [Kết quả xác minh trước đây](docs/VALIDATION.md), [tài nguyên và giấy phép](docs/ASSETS.md).
+- Code MIT: [LICENSE](LICENSE). Model, dữ liệu, ảnh và thư viện ngoài giữ giấy phép riêng.

@@ -111,3 +111,40 @@ class WorkflowTests(TestCase):
         client = Client(enforce_csrf_checks=True)
         client.force_login(self.user)
         self.assertEqual(client.post(reverse('analyze'), {}).status_code, 403)
+
+    def test_login_form_and_frontend_assets(self):
+        from django.contrib.staticfiles import finders
+        self.client.logout()
+        self.assertEqual(self.client.get(reverse('login')).status_code, 200)
+        response = self.client.post(reverse('login'), {
+            'username': 'operator', 'password': 'test-pass-123',
+        })
+        self.assertRedirects(response, reverse('dashboard'))
+        for asset in ('css/app.css', 'js/app.js', 'img/forest.jpg'):
+            self.assertIsNotNone(finders.find(asset))
+
+    def test_fosp_dispatch_preserves_mask_evidence_and_alert(self):
+        overlay = Image.new('RGB', (200, 100), '#ffa52d')
+        detections = [{'label': 'smoke', 'mask_coverage': 12.5}]
+        with override_settings(INFERENCE_MODE='fosp'), patch(
+            'monitor.fosp.predict_fosp', return_value=(detections, overlay)
+        ):
+            response = self.upload(smoke=False)
+        run = Analysis.objects.get()
+        self.assertEqual(run.mode, 'fosp')
+        self.assertEqual(run.detections, detections)
+        self.assertTrue(Alert.objects.filter(analysis=run).exists())
+        self.assertContains(self.client.get(response.url), '12,50')
+        with Image.open(run.annotated.path) as image:
+            self.assertEqual(image.size, overlay.size)
+            self.assertNotEqual(image.getpixel((0, 0)), (49, 108, 60))
+
+    def test_fosp_missing_checkpoint_does_not_create_analysis_or_alert(self):
+        from pathlib import Path
+        from .fosp import _load_model
+        _load_model.cache_clear()
+        with override_settings(INFERENCE_MODE='fosp', FOSP_MODEL_PATH=Path(self.temp.name) / 'missing.pth'):
+            response = self.upload()
+        self.assertRedirects(response, reverse('dashboard'))
+        self.assertEqual(Analysis.objects.count(), 0)
+        self.assertEqual(Alert.objects.count(), 0)
