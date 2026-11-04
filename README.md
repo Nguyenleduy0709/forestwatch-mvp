@@ -21,7 +21,10 @@ D:\ForestWatch\
 │   └── static/              CSS, ảnh và JS đã build
 ├── notebooks/               Notebook/script tiếp tục train FoSp
 ├── scripts/                 Kiểm tra dự án và FoSp web thật
-├── docs/                    Kiến trúc, kết quả, tài nguyên và xác minh
+├── docs/                    Kiến trúc, phạm vi sản phẩm, kết quả xác minh
+│   ├── README.md            Mục lục tài liệu
+│   ├── ARCHITECTURE.md      Luồng xử lý và các thành phần
+│   └── PRODUCT.md           Chức năng, giới hạn và hướng phát triển
 ├── .github/                 CI, mẫu PR, mẫu báo lỗi
 ├── .env.example             Mẫu biến môi trường, không chứa secret
 ├── CONTRIBUTING.md          Quy trình nhánh, PR, review và conflict
@@ -160,6 +163,7 @@ Nên chọn ảnh khói gốc, không phải ảnh đã tô màu. Script dùng S
 
 Dùng `main` ổn định, nhánh `feature/<ten-chuc-nang>` hoặc `fix/<ten-loi>`, PR và review theo [CONTRIBUTING.md](CONTRIBUTING.md). Không tạo `develop` khi chưa có nhu cầu phát hành riêng. Bảo vệ main là đề xuất chờ quản trị viên xác nhận.
 
+- [Mục lục tài liệu](docs/README.md), [kiến trúc](docs/ARCHITECTURE.md), [phạm vi sản phẩm](docs/PRODUCT.md).
 - [Backend và các route](backend/README.md), [Frontend](frontend/README.md).
 - [Kết quả xác minh trước đây](docs/VALIDATION.md), [tài nguyên và giấy phép](docs/ASSETS.md).
 - Code MIT: [LICENSE](LICENSE). Model, dữ liệu, ảnh và thư viện ngoài giữ giấy phép riêng.
