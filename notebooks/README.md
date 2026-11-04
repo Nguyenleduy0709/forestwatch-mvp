@@ -2,7 +2,15 @@
 
 **Có thể train trên Kaggle rồi chạy model trên máy dùng web.** Kaggle dùng để huấn luyện; backend Django dùng trọng số để suy luận từng ảnh. Không cần giữ notebook Kaggle chạy sau khi tải trọng số về.
 
-Hướng dẫn này là recipe chưa chạy trên GPU trong dự án. Chưa có trọng số hoặc số liệu độ chính xác kèm repo. Dùng Ultralytics YOLO detection cho nhãn bounding box của Pyro-SDIS; không cần mặt nạ khói để hoàn thành MVP. FoSp/segmentation không cắm trực tiếp vào adapter hiện tại.
+Phần YOLO dưới đây dùng nhãn bounding box của Pyro-SDIS. Web cũng có adapter FoSp cho mặt nạ khói SMOKE5K, cấu hình trong README ở thư mục gốc.
+
+## FoSp SMOKE5K
+
+`fosp_resume_14000.py` nối tiếp checkpoint 10.000 từ Output Version 5 của notebook ForestWatch FoSp SMOKE5K. Gắn Output đó vào một notebook GPU T4, bật Internet rồi dán toàn bộ script vào một cell. Script giữ lịch learning rate 40.000 update và dừng ở 14.000, chọn best bằng F1 trên 468 ảnh validation rồi chấm 400 ảnh test. Gói `forestwatch_fosp_14000.zip` gồm checkpoint, manifest, mã train và kết quả.
+
+Sau khi cell kết thúc, chọn Quick Save, mở Advanced Settings và chọn Save output for this version. Chờ trạng thái Successful rồi tải ZIP về máy. `last.pth` giữ trạng thái train ở mốc cuối, `best.pth` dùng cho web. Đặt bản best tại `backend/weights/fosp_best.pth` và bật `INFERENCE_MODE=fosp`.
+
+Kiến trúc dùng mã nguồn FoSp của Lujian Yao tại commit `02b9fd18ad1930d1081cf3b35a569d4b59e71d63`, cùng các phép toán MAT ở chế độ reference. Phân chia validation và cách tích lũy gradient được mô tả trong `run_config.json` của lượt train. [FoSp](https://github.com/LujianYao/FoSp)
 
 ## 1. Chuẩn bị notebook
 

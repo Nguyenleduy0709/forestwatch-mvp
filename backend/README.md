@@ -11,11 +11,12 @@ Backend đã có đầy đủ trong thư mục này. Django nhận yêu cầu t�
 | `forestwatch/urls.py` | Định tuyến yêu cầu |
 | `monitor/forms.py` | Kiểm tra và chuẩn hóa ảnh tải lên |
 | `monitor/views.py` | Xử lý upload, kết quả, quyền truy cập, cảnh báo |
-| `monitor/inference.py` | Chạy mô phỏng hoặc gọi YOLO thật |
+| `monitor/inference.py` | Chọn chế độ mô phỏng, YOLO hoặc FoSp |
+| `monitor/fosp.py` | Nạp FoSp, tạo mặt nạ khói và ảnh tô màu |
 | `monitor/models.py` | Analysis, Alert, AlertHistory |
 | `monitor/migrations/` | Cấu trúc database |
 | `monitor/tests.py` | Kiểm tra nghiệp vụ và quyền truy cập |
-| `weights/` | Đặt trọng số `best.pt` tự train, không đưa vào Git |
+| `weights/` | Đặt `best.pt` cho YOLO hoặc `fosp_best.pth` cho FoSp |
 
 ## Chạy từ thư mục gốc repo (Windows)
 

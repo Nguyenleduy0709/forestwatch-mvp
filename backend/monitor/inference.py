@@ -1,4 +1,4 @@
-"""Demo is explicitly synthetic. YOLO never silently falls back to demo."""
+"""Dispatch demo and trained model inference."""
 from functools import lru_cache
 from pathlib import Path
 from django.conf import settings
@@ -35,8 +35,11 @@ def predict(image, simulate=False):
             if label in {'smoke', 'fire', 'khoi', 'khói', 'lua', 'lửa'}:
                 detections.append({'label': label, 'confidence': round(float(box.conf.item()), 4),
                                    'box': [round(float(v)) for v in box.xyxy[0].tolist()]})
+    elif mode == 'fosp':
+        from .fosp import predict_fosp
+        return predict_fosp(image)
     else:
-        raise RuntimeError('INFERENCE_MODE chỉ nhận demo hoặc yolo.')
+        raise RuntimeError('INFERENCE_MODE chỉ nhận demo, yolo hoặc fosp.')
     annotated = image.copy()
     draw = ImageDraw.Draw(annotated)
     for item in detections:

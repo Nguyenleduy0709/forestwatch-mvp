@@ -1,0 +1,40 @@
+{
+  "saved_update": 14000,
+  "best_update": 14000,
+  "selection_metric": "validation image_mean.f1",
+  "validation": {
+    "n_images": 468,
+    "threshold": 0.4,
+    "image_mean": {
+      "smoke_iou": 0.832868321006988,
+      "f1": 0.9024062250321024,
+      "precision": 0.9098362339940409,
+      "recall": 0.9084340021303616,
+      "mae": 0.03950902967018266
+    },
+    "global_pixels": {
+      "smoke_iou": 0.8674362285576606,
+      "f1": 0.9290129593636903,
+      "precision": 0.9229743880743552,
+      "recall": 0.9351310658670479
+    }
+  },
+  "test": {
+    "n_images": 400,
+    "threshold": 0.4,
+    "image_mean": {
+      "smoke_iou": 0.6824131157285757,
+      "f1": 0.7687720227036892,
+      "precision": 0.8086399552700171,
+      "recall": 0.7753187339384968,
+      "mae": 0.0034710774843915715
+    },
+    "global_pixels": {
+      "smoke_iou": 0.832084356568205,
+      "f1": 0.9083472096523282,
+      "precision": 0.9194101811073999,
+      "recall": 0.8975473072327868
+    }
+  },
+  "test_used_for_selection": false
+}

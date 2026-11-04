@@ -41,13 +41,14 @@ Hai phần được tách theo thư mục; Django phục vụ cả HTML và xử
 - Tải ảnh JPG/PNG/WebP, kiểm tra định dạng/kích thước, bỏ metadata và chuẩn hóa ảnh.
 - Chế độ **demo**: người dùng chủ động chọn tình huống có/không có phát hiện. **Không chạy AI**, không tạo điểm tin cậy giả.
 - Chế độ **yolo**: chạy model detection đã fine-tune có nhãn smoke/fire và vẽ khung thật.
+- Chế độ **fosp** chạy phân đoạn khói bằng checkpoint FoSp SMOKE5K, tô mặt nạ lên ảnh và hiển thị tỷ lệ diện tích khói.
 - Một lần phân tích có đối tượng tạo một cảnh báo kèm ảnh bằng chứng.
 - Xác nhận/từ chối, đóng sự kiện đã xác nhận; lưu người thực hiện, thời gian và ghi chú.
 - Bố cục dọc theo phác thảo: ảnh ở trên, nguồn ảnh/thời gian/số vùng/trạng thái ở dưới, tiếp theo là xác minh và lịch sử.
 - Lịch sử và bộ lọc trạng thái; xem lại ảnh gốc/kết quả.
 - Ảnh bằng chứng chỉ truy cập được sau đăng nhập và kiểm tra chủ sở hữu.
 
-**Phạm vi:** MVP phân tích ảnh tĩnh, chạy trên máy để trình diễn. Chưa có camera trực tiếp, video, bản đồ, cảnh báo theo chuỗi thời gian, chống trùng giữa nhiều lần tải ảnh, FoSp, SAM hay dự báo nguy cơ theo thời tiết. Không tự gửi thông báo ra bên ngoài.
+**Phạm vi.** MVP phân tích ảnh tĩnh, chạy trên máy để trình diễn. Các phần camera trực tiếp, video, bản đồ, cảnh báo theo chuỗi thời gian và dự báo theo thời tiết nằm trong lộ trình tiếp theo.
 
 ## 1. Khởi động nhanh — không cần GPU
 
@@ -89,7 +90,31 @@ Mặc định `INFERENCE_MODE=demo`. Không cần tải dataset hay model để 
 
 Nếu có trọng số hợp lệ, dùng hướng dẫn dưới để trình diễn kết quả AI thật.
 
-## 3. Bật YOLO thật
+## 3. Chạy FoSp hoặc YOLO
+
+### FoSp phân đoạn khói
+
+Web chạy FoSp MiT-B3 và tô màu cam lên các pixel nhận diện là khói. Checkpoint tại update 14.000 được chọn bằng F1 trên 468 ảnh validation SMOKE5K. Trên 400 ảnh test giữ riêng, F1 trung bình theo ảnh là **76,88%**, IoU là **68,24%**, precision là **80,86%** và recall là **77,53%**. Ngưỡng tạo mặt nạ là 0,4. So với bản 10.000, F1 tăng 0,87 điểm phần trăm. Xem số liệu đầy đủ trong [kết quả đánh giá](docs/fosp_smoke5k_14000.json).
+
+Trong [Kaggle Output](https://www.kaggle.com/code/nguynlduyb24dckh043/notebook32e4daa033/output) của Version 4, tải `forestwatch_fosp_14000.zip` hoặc mở thư mục `fosp_smoke5k_14000`. Đặt `best.pth` vào `backend/weights/fosp_best.pth`. Trọng số được lưu riêng trên Kaggle. Web cần GPU NVIDIA và PyTorch CUDA.
+
+Ví dụ cho Windows với Python 3.12 và RTX 5070, chạy từ thư mục repo sau khi tạo `.venv` và migrate database:
+
+```powershell
+git -c core.symlinks=false clone https://github.com/LujianYao/FoSp.git .fosp-runtime/FoSp
+git -C .fosp-runtime/FoSp checkout 02b9fd18ad1930d1081cf3b35a569d4b59e71d63
+git clone --branch v1.6.2 --depth 1 https://github.com/open-mmlab/mmcv.git .fosp-runtime/mmcv
+.\.venv\Scripts\python.exe -m pip install torch==2.7.1 torchvision==0.22.1 --index-url https://download.pytorch.org/whl/cu128
+.\.venv\Scripts\python.exe -m pip install -r backend/requirements-fosp.txt
+$env:INFERENCE_MODE = 'fosp'
+.\.venv\Scripts\python.exe backend/manage.py runserver --noreload
+```
+
+Có thể đặt `FOSP_MODEL_PATH` để trỏ đến trọng số khác và `FOSP_RUNTIME_DIR` để chọn thư mục chứa mã nguồn. Sau khi thay trọng số, khởi động lại web.
+
+**Lưu để train tiếp.** Giữ `last.pth` (trọng số, optimizer và trạng thái ngẫu nhiên), `best.pth`, `manifest.json` (giữ nguyên nội dung), `run_config.json` và `results_14000.json` từ cùng thư mục Kaggle. Dùng [notebook nối tiếp 14.000](notebooks/fosp_continue.ipynb), gắn Output Version 4 vào Input rồi bật GPU và Internet. Notebook kiểm tra checkpoint 14.000 trước khi chạy. Lịch gốc được giữ ở `--max-updates 40000 --micro-batch 2 --accumulate 3`. Script trong ZIP cũ có giới hạn dừng 14.000, vì vậy lượt tiếp theo dùng script được notebook này chuẩn bị. Các đường dẫn dữ liệu thuộc môi trường Kaggle, chạy trên Windows cần điều chỉnh cách đọc đường dẫn và kiểm tra bộ nhớ GPU.
+
+### YOLO phát hiện bằng khung
 
 Cài thêm thư viện và đặt file trọng số **đã huấn luyện nhận diện khói** tại `backend/weights/best.pt`. File này không được kèm ZIP/repo. Không dùng `yolo11n.pt`/COCO mặc định rồi coi đó là model khói. MVP hỗ trợ model object detection có nhãn `smoke`, `fire`, `khói`, `lửa`, `khoi`, `lua`.
 
@@ -110,7 +135,7 @@ macOS/Linux: `INFERENCE_MODE=yolo MODEL_PATH="$PWD/backend/weights/best.pt" .ven
 - Pyro-SDIS có một lớp khói. Web hỗ trợ nhãn lửa nếu model có lớp lửa; nó không tự tạo năng lực nhận diện lửa cho model chỉ học khói.
 - Chỉ nạp `.pt` từ nguồn bạn tin cậy. Kiểm tra license của Ultralytics và trọng số trước khi phân phối/sử dụng thương mại.
 
-Huấn luyện trên Kaggle là bước riêng: kiểm tra nhãn, tách theo camera/chuỗi khi có thể, giữ test độc lập, đánh giá precision/recall/mAP và báo nhầm trên mây/sương. Không dùng các khung gần giống nhau ở cả train và test. Repo có [recipe Kaggle](notebooks/README.md) để copy vào notebook; chưa chạy training, chưa kèm trọng số hoặc số liệu chất lượng AI thực nghiệm.
+Repo có [recipe huấn luyện YOLO trên Kaggle](notebooks/README.md) để copy vào notebook. Khi đánh giá YOLO, giữ test độc lập theo camera hoặc chuỗi ảnh nếu có thể và báo precision, recall, mAP.
 
 ## 4. Sửa giao diện
 
@@ -149,8 +174,10 @@ flowchart LR
  B --> C{Chế độ}
  C --> D[Mô phỏng có ghi nhãn]
  C --> E[YOLO + trọng số của bạn]
+ C --> S[FoSp + checkpoint SMOKE5K]
  D --> F[Ảnh kết quả + dữ liệu phân tích]
  E --> F
+ S --> F
  F --> G[SQLite + file bằng chứng]
  G --> H[Xác minh và lịch sử cảnh báo]
 ```
@@ -162,7 +189,7 @@ MVP suy luận đồng bộ một ảnh mỗi yêu cầu để dễ chạy tối
 1. Gắn và đánh giá model khói thật, chọn ngưỡng validation.
 2. Worker đọc video, lấy mẫu khung hình; xét nhiều lần quan sát và chống cảnh báo trùng.
 3. Quản lý camera, bản đồ vị trí camera, dashboard thống kê.
-4. Thử 50 nhãn giả SAM và kiểm tra thủ công trước khi cân nhắc FoSp.
+4. Phân tích các lỗi của FoSp trên khói mỏng, mây và sương để chọn dữ liệu bổ sung.
 
 ## Tài nguyên và ghi công
 
