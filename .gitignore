@@ -13,3 +13,32 @@ backend/weights/*
 node_modules/
 *.log
 .DS_Store
+
+# Local training, migrated workspace and generated artifacts (keep on disk).
+/checkpoints/
+/datasets/
+/data/
+/outputs/
+/work/
+/migration-*.json
+*.zip
+*.tar
+*.tar.gz
+*.bundle
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.safetensors
+*.sqlite3
+*.sqlite3-*
+.env.*
+!.env.example
+.ipynb_checkpoints/
+.coverage
+htmlcov/
+.pytest_cache/
+# Authentication and machine-specific configuration.
+.aws/
+.gh/
+credentials*

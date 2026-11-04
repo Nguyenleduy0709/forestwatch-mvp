@@ -30,7 +30,7 @@ STATIC_URL = '/static/'
 STATICFILES_DIRS = [FRONTEND_DIR / 'static']
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 # Evidence is served by an authenticated view, not a public media directory.
-MEDIA_ROOT = BASE_DIR / 'media'
+MEDIA_ROOT = Path(os.getenv('MEDIA_ROOT', str(BASE_DIR / 'media')))
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 LOGIN_URL = 'login'
 LOGIN_REDIRECT_URL = 'dashboard'
