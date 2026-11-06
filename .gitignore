@@ -42,3 +42,5 @@ htmlcov/
 .aws/
 .gh/
 credentials*
+# Generated single-cell Kaggle script.
+research/temporal_fosp/build/

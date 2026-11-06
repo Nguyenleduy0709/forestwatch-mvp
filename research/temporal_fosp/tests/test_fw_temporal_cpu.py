@@ -1,0 +1,147 @@
+"""CPU checks for fw_temporal against the official FoSp code (random weights, no GPU).
+
+1. TemporalFoSp(use_temporal=False) must reproduce FOSP.forward exactly when FoSp's z is 0.
+2. _mat_input must equal EncoderDecoderFOSP._renormalization (BGR, [-1, 1]).
+3. The temporal path runs, starts close to FoSp, and back-propagates into the arbitration
+   heads and the decode head (but not into MAT).
+4. corrupt_reference / image_cues / metrics behave sensibly.
+"""
+import sys
+import time
+import types
+from pathlib import Path
+
+import numpy as np
+import torch
+
+import os  # noqa: E402
+REPO = Path(__file__).resolve().parents[3]
+FOSP = Path(os.environ.get('FOSP_DIR', REPO / '.fosp-runtime' / 'FoSp'))   # FoSp @ 02b9fd18
+MMCV = Path(os.environ.get('MMCV_DIR', REPO / '.fosp-runtime' / 'mmcv'))   # mmcv v1.6.2 source
+sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(FOSP), str(FOSP / 'inpainter_setting'), str(MMCV)]
+torch.manual_seed(0)
+np.random.seed(0)
+torch.set_num_threads(4)
+
+# --- make the CUDA-only FoSp code runnable on CPU for this test
+torch.Tensor.cuda = lambda self, *a, **k: self
+_orig_to = torch.nn.Module.to
+torch.nn.Module.to = lambda self, *a, **k: self if (a and isinstance(a[0], torch.device) and a[0].type == 'cuda') else _orig_to(self, *a, **k)
+
+from mmcv import Config  # noqa: E402
+from mmseg.models import build_segmentor  # noqa: E402
+from inpainter_setting.torch_utils.ops import bias_act, upfirdn2d  # noqa: E402
+from torch_utils.ops import bias_act as ba, upfirdn2d as uf  # noqa: E402
+for op in (bias_act, upfirdn2d, ba, uf):
+    op._init = lambda: False
+import mmseg.models.decode_heads.FOSP_main as fosp_main  # noqa: E402
+
+
+class _TorchProxy(types.ModuleType):
+    def __getattr__(self, name):
+        return getattr(torch, name)
+
+
+proxy = _TorchProxy('torch')
+proxy.device = lambda *a, **k: torch.device('cpu')
+fosp_main.torch = proxy
+
+
+class _NpProxy(types.ModuleType):
+    def __getattr__(self, name):
+        return getattr(np, name)
+
+
+np_proxy = _NpProxy('numpy')
+np_proxy.random = types.SimpleNamespace(randn=lambda *s: np.zeros(s))  # FoSp's z := 0
+fosp_main.np = np_proxy
+
+import fw_temporal as fwt  # noqa: E402
+
+cfg = Config.fromfile(str(FOSP / 'config/fosp_config.py'))
+cfg.model.pretrained = None
+t = time.time()
+seg = build_segmentor(cfg.model)
+seg.eval()
+print('built FoSp on CPU in', round(time.time() - t, 1), 's; params (M):', round(sum(p.numel() for p in seg.parameters()) / 1e6, 2))
+
+mean = np.array([123.675, 116.28, 103.53])
+std = np.array([58.395, 57.12, 57.375])
+rgb = np.random.randint(0, 256, size=(1, 512, 512, 3)).astype(np.float32)
+x = torch.from_numpy(((rgb - fwt.MEAN) / fwt.STD).transpose(0, 3, 1, 2).copy())
+
+wrapper = fwt.TemporalFoSp(seg, num_refs=1, use_temporal=False).eval()
+with torch.no_grad():
+    ren = seg._renormalization(x, mean=mean, std=std)
+    mine = wrapper._mat_input(x)
+    print('check 2  |_mat_input - _renormalization| max =', float((ren - mine).abs().max()))
+    assert float((ren - mine).abs().max()) < 1e-4
+
+    t = time.time()
+    ref_out, ref_hier = seg.decode_head.forward(seg.extract_feat(x), ren)
+    print('official FOSP.forward on CPU:', round(time.time() - t, 1), 's; out', tuple(ref_out.shape))
+    t = time.time()
+    my_out, my_hier, w = wrapper(x)
+    print('wrapper forward:', round(time.time() - t, 1), 's')
+    d = float((ref_out - my_out).abs().max())
+    dh = max(float((a - b).abs().max()) for a, b in zip(ref_hier, my_hier))
+    print('check 1  max|out diff| =', d, ' max|hier diff| =', dh, ' weights:', w)
+    assert d < 1e-4 and dh < 1e-4
+
+# --- temporal path
+temporal = fwt.TemporalFoSp(seg, num_refs=1, use_temporal=True)
+temporal.train()
+temporal.head.G.eval()
+ref_rgb = np.clip(rgb + np.random.normal(0, 8, rgb.shape), 0, 255).astype(np.float32)
+xr = torch.from_numpy(((ref_rgb - fwt.MEAN) / fwt.STD).transpose(0, 3, 1, 2).copy())[:, None]
+x2 = torch.cat([x, x], 0)
+xr2 = torch.cat([xr, xr], 0)
+has = torch.tensor([1.0, 0.0])
+y = torch.zeros(2, 1, 512, 512, dtype=torch.long)
+y[:, :, 200:260, 100:180] = 1
+valid = torch.ones(2, 1, 512, 512)
+valid[0, :, 180:280, 80:200] = 0
+t = time.time()
+out, hier, w = temporal(x2, xr2, has)
+print('temporal forward (B=2):', round(time.time() - t, 1), 's; out', tuple(out.shape), '; weight maps', [tuple(a.shape) for a in w])
+print('check 3a init weight on inferred source (should be ~0.98):', [round(float(a[0, 0].mean()), 4) for a in w])
+print('check 3b sample without history falls back to FoSp exactly:', all(float(a[1, 0].min()) == 1.0 for a in w))
+assert all(float(a[1, 0].min()) == 1.0 for a in w)
+loss = fwt.fosp_loss(temporal.head, out, hier, y)
+rel = fwt.reliability_loss(w, valid, has)
+(loss + 0.5 * rel).backward()
+g_arb = [p.grad for p in temporal.arbitration.parameters()]
+g_head = [p.grad for n, p in temporal.named_parameters() if n.startswith('seg.decode_head.fusion') and p.requires_grad]
+g_mat = [p.grad for p in temporal.head.G.parameters()]
+print('check 3c loss', round(float(loss), 4), 'rel', round(float(rel), 6),
+      '| arbitration grads non-zero:', sum(int(g is not None and float(g.abs().sum()) > 0) for g in g_arb), '/', len(g_arb),
+      '| fusion grads:', sum(int(g is not None) for g in g_head), '/', len(g_head),
+      '| MAT grads (must be 0):', sum(int(g is not None) for g in g_mat))
+assert all(g is None for g in g_mat)
+assert any(g is not None and float(g.abs().sum()) > 0 for g in g_arb)
+
+# --- corruptions / cues / metrics
+rng = np.random.default_rng(0)
+cur = (np.random.rand(512, 512, 3) * 255).astype(np.uint8)
+ref = cur.copy()
+m = np.zeros((512, 512), bool)
+m[100:150, 100:200] = True
+kinds_seen = {}
+for i in range(200):
+    r2, v, kinds = fwt.corrupt_reference(cur, ref, m, (cur, m.astype(np.uint8)), rng)
+    assert r2.shape == ref.shape and r2.dtype == np.uint8 and v.shape == (512, 512) and set(np.unique(v)) <= {0, 1}
+    for k in kinds:
+        kinds_seen[k] = kinds_seen.get(k, 0) + 1
+    if kinds == ['self']:
+        assert v[m].max() == 0 and v[~m].mean() > 0.9
+print('check 4a corruption kinds over 200 draws:', kinds_seen)
+c = torch.rand(1, 3, 64, 64)
+cues_same = fwt.image_cues(c, c)
+cues_shift = fwt.image_cues(c, torch.roll(c, 5, dims=3))
+print('check 4b cues identical: r=%.4f g=%.3f | shifted: r=%.4f g=%.3f' % (
+    float(cues_same[:, 0].mean()), float(cues_same[:, 1].mean()), float(cues_shift[:, 0].mean()), float(cues_shift[:, 1].mean())))
+assert float(cues_same[:, 1].mean()) > 0.99 and float(cues_shift[:, 1].mean()) < 0.5
+pa = [dict(id=str(i), event=str(i % 5), f1=0.4, iou=0.3) for i in range(50)]
+pb = [dict(id=str(i), event=str(i % 5), f1=0.45, iou=0.33) for i in range(50)]
+print('check 4c bootstrap:', fwt.paired_bootstrap(pa, pb, n=200))
+print('ALL CPU CHECKS PASSED')
