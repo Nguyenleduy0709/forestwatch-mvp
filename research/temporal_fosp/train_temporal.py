@@ -9,6 +9,7 @@ All runs use the same code path, fixed MAT latent (z = 0), threshold 0.4, 512x51
 Every result is printed as one JSON line (tag + payload) so it can be read from the log.
 """
 import collections
+import hashlib
 import json
 import os
 import random
@@ -246,6 +247,12 @@ for name, rows in (('train', train_rows), ('val', val_rows), ('test', test_rows)
     log('DATA', split=name, images=len(rows), with_ref=sum(bool(r.get('ref')) for r in rows),
         events=len({r['event'] for r in rows}), day1_pairs=sum(bool(r.get('day1_pair')) for r in rows))
 log('DATA', split='negatives', images=len(neg_rows), with_ref=sum(bool(n.get('ref')) for n in neg_rows), seconds=round(elapsed()))
+# FW_EXAMPLES=N saves image | ground truth | prediction panels of N test images for every run's test pass
+# (OUT/examples/<run>_test/<id>.jpg).  The images are fixed by a hash of their id, never by their scores.
+EXAMPLES = int(os.environ.get('FW_EXAMPLES', 0))
+EXAMPLE_IDS = {r['id'] for r in sorted(test_rows, key=lambda r: hashlib.md5(r['id'].encode()).hexdigest())[:EXAMPLES]}
+if EXAMPLE_IDS:
+    log('EXAMPLES', n=len(EXAMPLE_IDS), ids=sorted(EXAMPLE_IDS))
 
 
 def _find_s5k_root():
@@ -530,6 +537,24 @@ def report_s5k(tag, rows):
     return payload
 
 
+def save_example(label, r, x_norm, gt, pred, f1):
+    from PIL import ImageDraw
+    rgb = np.clip(x_norm.numpy().transpose(1, 2, 0) * STD + MEAN, 0, 255).astype(np.uint8)
+
+    def tint(mask, color):
+        o = rgb.astype(np.float32)
+        o[mask] = 0.45 * o[mask] + 0.55 * np.array(color, np.float32)
+        return o.astype(np.uint8)
+    im = Image.fromarray(np.concatenate([rgb, tint(gt == 1, (60, 220, 90)), tint(pred, (255, 140, 30))], 1))
+    d = ImageDraw.Draw(im)
+    d.text((6, 6), r['id'][-34:], fill=(255, 255, 255))
+    d.text((518, 6), 'ground truth', fill=(255, 255, 255))
+    d.text((1030, 6), f"{label.rsplit('_', 1)[0]}  image-F1 {f1:.2f}", fill=(255, 255, 255))
+    out = OUT / 'examples' / label
+    out.mkdir(parents=True, exist_ok=True)
+    im.save(out / f"{r['id']}.jpg", quality=88)
+
+
 @torch.no_grad()
 def evaluate(model, rows, use_temporal, label, negatives=False, no_ref=False, swap_ref=None):
     model.eval()
@@ -543,6 +568,8 @@ def evaluate(model, rows, use_temporal, label, negatives=False, no_ref=False, sw
         for j in range(len(idx)):
             r, gt = rows[int(idx[j])], y[j, 0].numpy()
             s = _score(r, prob[j] > CFG['threshold'], gt, negatives, has[j])
+            if EXAMPLE_IDS and not negatives and label.endswith('_test') and r['id'] in EXAMPLE_IDS:
+                save_example(label, r, x[j], gt, prob[j] > CFG['threshold'], s['f1'])
             if wobs is not None and not negatives:
                 g = gt == 1
                 s['w_obs_smoke'] = float(wobs[0][j][g].mean()) if g.any() else None
@@ -671,7 +698,7 @@ def train(name, use_temporal, updates=None, budget=None, init=None, input_fusion
 results = {}
 try:
     log('RUN_CONFIG', runs=RUNS, fixed_updates=FIXED_UPDATES, init=INIT, workers=WORKERS, eval_batch=EVAL_BATCH, out=str(OUT),
-        eval_only=EVAL_ONLY, tta_sweep=TTA_SWEEP, tta_thresholds=TTA_THRESHOLDS, **CFG)
+        eval_only=EVAL_ONLY, tta_sweep=TTA_SWEEP, tta_thresholds=TTA_THRESHOLDS, examples=EXAMPLES, **CFG)
     n_updates = FIXED_UPDATES
     if 'E0' in RUNS:
         # E0: transfer baseline (no SmokeSeg training)
