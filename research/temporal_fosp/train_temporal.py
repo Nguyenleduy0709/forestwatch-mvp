@@ -57,13 +57,28 @@ assert CFG['gate_loss'] in ('one_sided', 'bce'), CFG['gate_loss']
 # SmokeSeg val image-F1.  No SMOKE5K recording overlaps our SmokeSeg train/val/test (checked on the manifests).
 CFG['s5k_train'] = os.environ.get('FW_S5K_TRAIN') == '1'
 S5K_EVAL = os.environ.get('FW_S5K_EVAL') == '1' or CFG['s5k_train']
-WORKERS = int(os.environ.get('FW_WORKERS', 0 if DRY else 3))   # use 0 on Windows (spawn re-runs this script)
+# Small smoke (69% of the E1 shortfall): FW_DICE_WEIGHT adds a per-image soft-F1 loss (the metric averages F1 over
+# images, while the BCE terms are dominated by large plumes); FW_ZOOM_MIN lowers the smallest random training crop
+# (default 410 -> up to 2x zoom at 256), half of these crops are centred on a smoke pixel so small plumes stay in view.
+CFG['dice_weight'] = float(os.environ.get('FW_DICE_WEIGHT', 0))
+CFG['zoom_min'] = int(os.environ.get('FW_ZOOM_MIN', 410))
+assert 128 <= CFG['zoom_min'] <= 512, CFG['zoom_min']
+# Test-time choices, selected on val only (never on test): FW_TTA_SWEEP=1 scores val at every
+# (mode, threshold) pair, mode in none / flip / zoom / zoom+flip (zoom = 4 overlapping 320 px tiles enlarged to 512),
+# keeps the best pair and reports test, false alarms and SMOKE5K at that pair as run "<run>_tta".
+# FW_EVAL_ONLY=1 skips training: E1/E2 are loaded from FW_INIT_E1/E2 and evaluated (with the sweep).
+EVAL_ONLY = os.environ.get('FW_EVAL_ONLY') == '1'
+TTA_SWEEP = os.environ.get('FW_TTA_SWEEP') == '1' or EVAL_ONLY
+TTA_THRESHOLDS = [float(t) for t in os.environ.get('FW_TTA_THRESHOLDS', '0.25,0.3,0.35,0.4,0.45,0.5').split(',')]
+TTA_MODES = ('none', 'flip', 'zoom', 'zoom+flip')
+WORKERS =int(os.environ.get('FW_WORKERS', 0 if DRY else 3))   # use 0 on Windows (spawn re-runs this script)
 EVAL_BATCH = int(os.environ.get('FW_EVAL_BATCH', 4))
 FIXED_UPDATES = int(os.environ.get('FW_UPDATES', 0)) or None    # same update count for E1 and E2, no E1 time budget
 RUNS = [r.strip() for r in os.environ.get('FW_RUNS', 'E0,E1,E2').split(',')]
 INIT = {'E1': os.environ.get('FW_INIT_E1'), 'E2': os.environ.get('FW_INIT_E2')}  # warm start from *_best.pth
 NO_PIP = os.environ.get('FW_NO_PIP') == '1'
-assert 'E1' in RUNS or FIXED_UPDATES or 'E2' not in RUNS, 'E2 without E1 needs FW_UPDATES'
+assert EVAL_ONLY or 'E1' in RUNS or FIXED_UPDATES or 'E2' not in RUNS, 'E2 without E1 needs FW_UPDATES'
+assert not EVAL_ONLY or all(INIT[r] for r in ('E1', 'E2') if r in RUNS), 'FW_EVAL_ONLY needs FW_INIT_E1/E2 for E1/E2'
 # Laptop protection: pause (never kill) so E1 and E2 still get the same number of updates.
 THERMAL_MAX = float(os.environ.get('FW_THERMAL_MAX', 0))        # pause when GPU temp >= this twice in a row (~1 min); 0 = off
 THERMAL_RESUME = float(os.environ.get('FW_THERMAL_RESUME', 75))  # resume once the GPU has cooled to this
@@ -346,8 +361,16 @@ class SmokeSet(torch.utils.data.Dataset):
         if self.train:
             if random.random() < 0.5:
                 img, mask, ref = (t.transpose(Image.Transpose.FLIP_LEFT_RIGHT) for t in (img, mask, ref))
-            side = random.randint(410, 512)
-            left, top = random.randint(0, 512 - side), random.randint(0, 512 - side)
+            side = random.randint(CFG['zoom_min'], 512)
+            ys = None
+            if CFG['zoom_min'] < 410 and random.random() < 0.5:  # zoomed crop centred near a smoke pixel
+                ys, xs = np.nonzero(np.asarray(mask) == 1)
+            if ys is not None and len(ys):
+                k = random.randrange(len(ys))
+                left = min(max(int(xs[k]) - random.randint(0, side - 1), 0), 512 - side)
+                top = min(max(int(ys[k]) - random.randint(0, side - 1), 0), 512 - side)
+            else:  # default path: the same random calls as before, so FW_ZOOM_MIN=410 reproduces earlier runs
+                left, top = random.randint(0, 512 - side), random.randint(0, 512 - side)
             box = (left, top, left + side, top + side)
             img, ref = (t.crop(box).resize((512, 512), BIL) for t in (img, ref))
             mask = mask.crop(box).resize((512, 512), NEAR)
@@ -384,10 +407,96 @@ def loader(ds, batch, shuffle):
                                        pin_memory=not DRY, persistent_workers=shuffle and WORKERS > 0, worker_init_fn=worker_init)
 
 
+def _prob(model, x, xr, has, use_temporal):
+    """Probability map at the input size, (B, H, W)."""
+    logits, _, _ = model(x, xr if use_temporal else None, has)
+    return torch.sigmoid(F.interpolate(logits, size=x.shape[-2:], mode='bilinear', align_corners=False))[:, 0]
+
+
+def _zoom_prob(model, x, xr, has, use_temporal, tile=320):
+    """Four overlapping tile x tile crops (stride H - tile), each enlarged to the input size, predicted, shrunk back
+    and averaged where they overlap.  FoSp's mask comes out at 1/4 resolution, so a 20 px plume gets ~1.6x the cells."""
+    _, _, H, W = x.shape
+    acc, cnt = x.new_zeros(x.shape[0], H, W), x.new_zeros(1, H, W)
+    for top in (0, H - tile):
+        for left in (0, W - tile):
+            ys, xs = slice(top, top + tile), slice(left, left + tile)
+            xz = F.interpolate(x[:, :, ys, xs], size=(H, W), mode='bilinear', align_corners=False)
+            xrz = F.interpolate(xr[:, 0, :, ys, xs], size=(H, W), mode='bilinear', align_corners=False)[:, None]
+            p = _prob(model, xz, xrz, has, use_temporal)
+            acc[:, ys, xs] += F.interpolate(p[:, None], size=(tile, tile), mode='bilinear', align_corners=False)[:, 0]
+            cnt[:, ys, xs] += 1
+    return acc / cnt
+
+
+def tta_components(model, x, xr, has, use_temporal, modes):
+    comp = {'full': _prob(model, x, xr, has, use_temporal)}
+    if any('flip' in m for m in modes):
+        comp['flip'] = _prob(model, x.flip(-1), xr.flip(-1), has, use_temporal).flip(-1)
+    if any('zoom' in m for m in modes):
+        comp['zoom'] = _zoom_prob(model, x, xr, has, use_temporal)
+    return comp
+
+
+def tta_mode(comp, mode):
+    """none = full image; flip = mean(full, mirrored); zoom = mean(full, tiles); zoom+flip = mean of all three."""
+    parts = [comp['full']] + [comp[k] for k in ('flip', 'zoom') if k in mode]
+    return torch.stack(parts).mean(0)
+
+
+def _score(r, pred, gt, negatives, has_ref):
+    if negatives:
+        npx = int(pred.sum())
+        return dict(id=r['id'], event=r['seq'].split('_')[0], area=npx / pred.size, fa_any=npx > 0, fa_50=npx >= 50, fa_200=npx >= 200)
+    s = fwt.image_scores(pred, gt == 1, gt == 255)
+    s.update(id=r['id'], event=r['event'], offset=r['offset'], day1_pair=bool(r.get('day1_pair')),
+             has_ref=bool(has_ref), size=fwt.size_bucket(s['gt_frac']))
+    return s
+
+
 @torch.no_grad()
-def evaluate_s5k(model, rows, use_temporal, label):
-    """SMOKE5K test as in FoSp-SMOKE5K: 512 input, logits resized to the native mask, mask > 127 = smoke."""
+def evaluate_grid(model, rows, use_temporal, modes, thresholds, negatives=False):
+    """{(mode, threshold): row scores} for every pair, from one pass over the rows."""
     model.eval()
+    out = {(m, t): [] for m in modes for t in thresholds}
+    for x, xr, has, valid, y, idx in loader(SmokeSet(rows, negatives=negatives), EVAL_BATCH, False):
+        x, xr, hc = x.cuda(non_blocking=True), xr.cuda(non_blocking=True), has.cuda()
+        comp = tta_components(model, x, xr, hc, use_temporal, modes)
+        for m in modes:
+            prob = tta_mode(comp, m).cpu().numpy()
+            for j in range(len(idx)):
+                r, gt = rows[int(idx[j])], y[j, 0].numpy()
+                for t in thresholds:
+                    out[(m, t)].append(_score(r, prob[j] > t, gt, negatives, has[j]))
+    return out
+
+
+def tta_select(run, model, use_temporal):
+    """Choose (mode, threshold) on val only, then score test, the smoke-free frames and SMOKE5K at that pair."""
+    grid = evaluate_grid(model, val_rows, use_temporal, TTA_MODES, TTA_THRESHOLDS)
+    mean = {k: float(np.mean([s['f1'] for s in v])) for k, v in grid.items()}
+    cost = {'none': 0, 'flip': 1, 'zoom': 2, 'zoom+flip': 3}
+    best = max(grid, key=lambda k: (round(mean[k], 6), k == ('none', CFG['threshold']), -cost[k[0]]))
+    mode, thr = best
+    log('TTA_SELECT', run=run, mode=mode, threshold=thr, val_image_f1=mean[best],
+        default_val_image_f1=mean.get(('none', CFG['threshold'])), grid={f'{m}@{t:g}': round(v, 4) for (m, t), v in mean.items()})
+    res = {'val': grid[best],
+           'test': evaluate_grid(model, test_rows, use_temporal, [mode], [thr])[best],
+           'neg': evaluate_grid(model, neg_rows, use_temporal, [mode], [thr], negatives=True)[best]}
+    report(f'RESULT_{run}_tta_test', res['test'])
+    report(f'RESULT_{run}_tta_neg', res['neg'], negatives=True)
+    if S5K_TEST:
+        res['s5k'] = evaluate_s5k(model, S5K_TEST, use_temporal, f'{run}_tta_s5k', mode=mode, thr=thr)
+        report_s5k(f'RESULT_{run}_tta_s5k', res['s5k'])
+    return res
+
+
+@torch.no_grad()
+def evaluate_s5k(model, rows, use_temporal, label, mode='none', thr=None):
+    """SMOKE5K test as in FoSp-SMOKE5K: 512 input, logits resized to the native mask, mask > 127 = smoke.
+    With a test-time mode the averaged 512 probability map is resized to the native mask instead."""
+    model.eval()
+    thr = CFG['threshold'] if thr is None else thr
     out = []
     for r in rows:
         with Image.open(r['image']) as im:
@@ -396,9 +505,13 @@ def evaluate_s5k(model, rows, use_temporal, label):
             gt = np.asarray(m.convert('L')) > 127
         x = torch.from_numpy(((a - MEAN) / STD).transpose(2, 0, 1).copy())[None].cuda()
         has = torch.zeros(1).cuda()  # no history: E2 falls back to the FoSp path exactly
-        logits, _, _ = model(x, x[:, None] if use_temporal else None, has)
-        prob = torch.sigmoid(F.interpolate(logits, size=gt.shape, mode='bilinear', align_corners=False))[0, 0].cpu().numpy()
-        s = fwt.image_scores(prob > CFG['threshold'], gt)
+        if mode == 'none':
+            logits, _, _ = model(x, x[:, None] if use_temporal else None, has)
+            prob = torch.sigmoid(F.interpolate(logits, size=gt.shape, mode='bilinear', align_corners=False))[0, 0].cpu().numpy()
+        else:
+            p = tta_mode(tta_components(model, x, x[:, None], has, use_temporal, [mode]), mode)
+            prob = F.interpolate(p[:, None], size=gt.shape, mode='bilinear', align_corners=False)[0, 0].cpu().numpy()
+        s = fwt.image_scores(prob > thr, gt)
         s.update(id=r['id'], event=r['event'], cam=r['cam'])
         out.append(s)
     return out
@@ -422,20 +535,12 @@ def evaluate(model, rows, use_temporal, label, negatives=False, no_ref=False, sw
         prob = torch.sigmoid(F.interpolate(logits, size=(512, 512), mode='bilinear', align_corners=False))[:, 0].cpu().numpy()
         wobs = [F.interpolate(w[-1][:, 1:2], size=(512, 512), mode='bilinear', align_corners=False)[:, 0].cpu().numpy()] if w else None
         for j in range(len(idx)):
-            r = rows[int(idx[j])]
-            pred = prob[j] > CFG['threshold']
-            if negatives:
-                npx = int(pred.sum())
-                s = dict(id=r['id'], event=r['seq'].split('_')[0], area=npx / pred.size, fa_any=npx > 0, fa_50=npx >= 50, fa_200=npx >= 200)
-            else:
-                gt = y[j, 0].numpy()
-                s = fwt.image_scores(pred, gt == 1, gt == 255)
-                s.update(id=r['id'], event=r['event'], offset=r['offset'], day1_pair=bool(r.get('day1_pair')),
-                         has_ref=bool(has[j]), size=fwt.size_bucket(s['gt_frac']))
-                if wobs is not None:
-                    g = gt == 1
-                    s['w_obs_smoke'] = float(wobs[0][j][g].mean()) if g.any() else None
-                    s['w_obs_bg'] = float(wobs[0][j][~g].mean())
+            r, gt = rows[int(idx[j])], y[j, 0].numpy()
+            s = _score(r, prob[j] > CFG['threshold'], gt, negatives, has[j])
+            if wobs is not None and not negatives:
+                g = gt == 1
+                s['w_obs_smoke'] = float(wobs[0][j][g].mean()) if g.any() else None
+                s['w_obs_bg'] = float(wobs[0][j][~g].mean())
             out.append(s)
     return out
 
@@ -499,6 +604,8 @@ def train(name, use_temporal, updates=None, budget=None, init=None):
             x, xr, has, valid, y = (t.cuda(non_blocking=True) for t in (x, xr, has, valid, y))
             out, hier, w = model(x, xr if use_temporal else None, has)
             loss = fwt.fosp_loss(model.head, out, hier, y)
+            if CFG['dice_weight']:
+                loss = loss + CFG['dice_weight'] * fwt.soft_f1_loss(out, y)
             if use_temporal and w:
                 rel = (fwt.gate_bce_loss if CFG['gate_loss'] == 'bce' else fwt.reliability_loss)(w, valid, has)
                 loss = loss + CFG['rel_weight'] * rel
@@ -555,7 +662,8 @@ def train(name, use_temporal, updates=None, budget=None, init=None):
 
 results = {}
 try:
-    log('RUN_CONFIG', runs=RUNS, fixed_updates=FIXED_UPDATES, init=INIT, workers=WORKERS, eval_batch=EVAL_BATCH, out=str(OUT), **CFG)
+    log('RUN_CONFIG', runs=RUNS, fixed_updates=FIXED_UPDATES, init=INIT, workers=WORKERS, eval_batch=EVAL_BATCH, out=str(OUT),
+        eval_only=EVAL_ONLY, tta_sweep=TTA_SWEEP, tta_thresholds=TTA_THRESHOLDS, **CFG)
     n_updates = FIXED_UPDATES
     if 'E0' in RUNS:
         # E0: transfer baseline (no SmokeSeg training)
@@ -572,8 +680,11 @@ try:
 
     if 'E1' in RUNS:
         # E1: single-frame fine-tune (sets the update budget for both runs unless FW_UPDATES is given)
-        m1, n_updates = train('E1_single', False, updates=FIXED_UPDATES, budget=None if FIXED_UPDATES else E1_TRAIN_BUDGET,
-                              init=INIT['E1'])
+        if EVAL_ONLY:
+            m1, n_updates = build(False, INIT['E1']), FIXED_UPDATES
+        else:
+            m1, n_updates = train('E1_single', False, updates=FIXED_UPDATES, budget=None if FIXED_UPDATES else E1_TRAIN_BUDGET,
+                                  init=INIT['E1'])
         results['E1'] = {s: evaluate(m1, rows, False, 'E1_' + s) for s, rows in (('val', val_rows), ('test', test_rows))}
         results['E1']['neg'] = evaluate(m1, neg_rows, False, 'E1_neg', negatives=True)
         for s in ('val', 'test'):
@@ -582,12 +693,14 @@ try:
         if S5K_TEST:
             results['E1']['s5k'] = evaluate_s5k(m1, S5K_TEST, False, 'E1_s5k')
             report_s5k('RESULT_E1_s5k', results['E1']['s5k'])
+        if TTA_SWEEP:
+            results['E1_tta'] = tta_select('E1', m1, False)
         del m1; torch.cuda.empty_cache()
 
     if 'E2' not in RUNS:
         raise SystemExit(0)  # the finally-block still writes bootstrap lines, per_image.json and ALL_DONE
     # E2: same number of updates, observed background + arbitration
-    m2, _ = train('E2_temporal', True, updates=n_updates, init=INIT['E2'])
+    m2 = build(True, INIT['E2']) if EVAL_ONLY else train('E2_temporal', True, updates=n_updates, init=INIT['E2'])[0]
     results['E2'] = {s: evaluate(m2, rows, True, 'E2_' + s) for s, rows in (('val', val_rows), ('test', test_rows))}
     results['E2']['neg'] = evaluate(m2, neg_rows, True, 'E2_neg', negatives=True)
     for s in ('val', 'test'):
@@ -596,6 +709,8 @@ try:
     if S5K_TEST:
         results['E2']['s5k'] = evaluate_s5k(m2, S5K_TEST, True, 'E2_s5k')
         report_s5k('RESULT_E2_s5k', results['E2']['s5k'])
+    if TTA_SWEEP:
+        results['E2_tta'] = tta_select('E2', m2, True)
     # Where does the gain come from?  (a) same E2 weights, history switched off -> pure FoSp path;
     # (b) reference taken from a different camera -> reliability should fall back gracefully.
     if elapsed() < TOTAL_BUDGET - 6 * 60:
@@ -609,7 +724,8 @@ try:
             results['E2_wrongref'] = {'test': evaluate(m2, test_rows, True, 'E2_wrongref', swap_ref=swap)}
             report('RESULT_E2_wrongref_test', results['E2_wrongref']['test'])
 finally:
-    for a, b in (('E0', 'E1'), ('E1', 'E2'), ('E0', 'E2'), ('E1', 'E2_noref'), ('E1', 'E2_wrongref'), ('E2_noref', 'E2')):
+    for a, b in (('E0', 'E1'), ('E1', 'E2'), ('E0', 'E2'), ('E1', 'E2_noref'), ('E1', 'E2_wrongref'), ('E2_noref', 'E2'),
+                 ('E1', 'E1_tta'), ('E2', 'E2_tta'), ('E0', 'E1_tta')):
         if a in results and b in results:
             for s in ('val', 'test', 's5k'):
                 if s not in results[a] or s not in results[b]:

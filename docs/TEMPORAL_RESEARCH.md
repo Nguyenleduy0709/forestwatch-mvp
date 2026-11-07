@@ -194,6 +194,27 @@ Câu hỏi của lượt này:
 
 Code: `FW_S5K_TRAIN`, `FW_S5K_EVAL` trong `train_temporal.py`; notebook dựng bằng `research/temporal_fosp/make_kaggle_notebook.py --preset day3-s5k-a|day3-s5k-b`.
 
+**Phần còn thiếu để lên image-F1 0,80 (điểm từng ảnh của E1 lượt 2, test 701 ảnh)**
+
+Test image-F1 0,6921; còn thiếu 75,6 điểm-ảnh để lên 0,80.
+
+| Nhóm | Số ảnh | image-F1 | Ảnh F1 = 0 | Phần của tổng (1 − F1) |
+| --- | ---: | ---: | ---: | ---: |
+| Khói nhỏ (< 0,5% ảnh) | 373 | 0,6024 | 46 | 69% |
+| Khói vừa | 220 | 0,7511 | 5 | 25% |
+| Khói lớn | 108 | 0,8817 | 0 | 6% |
+| 0–10 phút | 141 | 0,4553 | 42 | 36% |
+| 10–20 phút | 179 | 0,7705 | 3 | 19% |
+| > 20 phút | 381 | 0,7429 | 6 | 45% |
+
+- 51 ảnh F1 = 0: 42 ảnh không có pixel nào vượt ngưỡng (bỏ sót hẳn), 9 ảnh chỉ đoán sai chỗ.
+- Khói nhỏ có trung vị 484 px trên ảnh 512×512 (0,18%); 10% nhỏ nhất ≤ 122 px. Ảnh SmokeSeg gốc đã là 512×512, còn mask của FoSp ra ở 1/4 độ phân giải.
+- Nếu cả 51 ảnh F1 = 0 lên bằng trung bình các ảnh còn lại (0,7464), F1 chung chỉ đạt 0,7464. Muốn tới 0,80 phải vừa bắt được khói sớm vừa vẽ mask khói nhỏ tốt hơn.
+
+**Lượt 5 (code đã sẵn, chạy sau lượt 4)**
+- `day4-tta-a` / `day4-tta-b`: không train. Nạp E1 tốt nhất của từng nhánh, chọn cách chấm (`none`, `flip`, `zoom`, `zoom+flip`) và ngưỡng (0,25–0,5) **chỉ trên val**, rồi chấm test, khung âm, SMOKE5K đúng một lần ở lựa chọn đó. Nhắm vào các ảnh bỏ sót có xác suất sát ngưỡng.
+- `day4-dice-zoom`: E1 cùng 6000 update, thêm loss soft-F1 theo ảnh (`FW_DICE_WEIGHT=1`) và ô cắt phóng tới 2× quanh khói (`FW_ZOOM_MIN=256`), kèm phép dò ở trên. Cấu hình dữ liệu lấy theo nhánh thắng ở lượt 4. Lượt này đổi hai thứ cùng lúc, nên tác dụng riêng của từng thứ cần ablation sau.
+
 **Sau lượt này**
 - Đánh giá K-fold nhóm theo trạm.
 - Bổ sung ảnh sương/mây thật: khung trước lúc cháy của FIgLib vào ngày có sương/mây, video PYRONEAR-2025, kho HPWREN.

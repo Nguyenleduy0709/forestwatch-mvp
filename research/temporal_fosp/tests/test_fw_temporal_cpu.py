@@ -175,4 +175,21 @@ g1 = logits.grad[0, 1]
 print('check 4d gate_bce_loss %.4f | grad on observed logit: invalid %+.4f, valid %+.4f, no-ref sample %.1f' % (
     float(lg), float(g1[:4].mean()), float(g1[4:].mean()), float(logits.grad[1].abs().sum())))
 assert float(g1[:4].mean()) > 0 > float(g1[4:].mean()) and float(logits.grad[1].abs().sum()) == 0
+# per-image soft-F1 loss: ~0 for a perfect mask, ~1 when the smoke is missed, ignore pixels do not count,
+# and its gradient raises the logit on smoke and lowers it on background
+ys = torch.zeros(2, 1, 64, 64, dtype=torch.long)
+ys[0, :, 10:20, 10:20] = 1
+ys[0, :, 40:50, 40:50] = 255
+perfect = torch.where(ys == 1, 20.0, -20.0).float()
+missed = torch.full((2, 1, 64, 64), -20.0)
+l_perfect, l_missed = float(fwt.soft_f1_loss(perfect, ys)), float(fwt.soft_f1_loss(missed[:1], ys[:1]))
+noisy = perfect.clone()
+noisy[ys == 255] = 20.0  # confident "smoke" on ignored pixels must not be penalised
+l_ignore = float(fwt.soft_f1_loss(noisy, ys))
+lg2 = torch.zeros(1, 1, 64, 64, requires_grad=True)
+fwt.soft_f1_loss(lg2, ys[:1]).backward()
+gs, gb = float(lg2.grad[0, 0][ys[0, 0] == 1].mean()), float(lg2.grad[0, 0][ys[0, 0] == 0].mean())
+print('check 4e soft_f1_loss perfect %.4f, missed %.4f, ignore-only noise %.4f | grad smoke %+.2e, background %+.2e' % (
+    l_perfect, l_missed, l_ignore, gs, gb))
+assert l_perfect < 0.01 and l_missed > 0.95 and abs(l_ignore - l_perfect) < 1e-6 and gs < 0 < gb
 print('ALL CPU CHECKS PASSED')
