@@ -176,7 +176,7 @@ Con số 76,88% là image-F1 của FoSp 14k trên 400 ảnh test SMOKE5K, chấm
 
 Vậy khoảng cách đến từ dữ liệu, không phải do cách đo.
 
-**Lượt 4 (07/11/2026, đang chạy trên Kaggle): thêm SMOKE5K vào train**
+**Lượt 4 (07/11/2026, Kaggle T4): thêm SMOKE5K vào train**
 
 Từ lượt này chỉ train trên Kaggle. Có hai notebook private trên T4, chạy song song, khác nhau duy nhất ở dữ liệu train:
 - **A** (`forestwatch-day3-s5k-a`): chỉ SmokeSeg (4218 ảnh).
@@ -193,6 +193,46 @@ Câu hỏi của lượt này:
 2. Fine-tune trên SmokeSeg có làm mất độ chính xác trên SMOKE5K không?
 
 Code: `FW_S5K_TRAIN`, `FW_S5K_EVAL` trong `train_temporal.py`; notebook dựng bằng `research/temporal_fosp/make_kaggle_notebook.py --preset day3-s5k-a|day3-s5k-b`.
+
+Kết quả (log `day3_s5k_a.log`, `day3_s5k_b.log`, bản sao trong `checkpoints/temporal_fosp_2026-11-07/kaggle_day3/`). E1 train 276,6 phút ở A và 264,5 phút ở B (2,6–2,8 s/update, VRAM đỉnh 13,8 GB); cả notebook 292 và 279 phút.
+
+| | val image-F1 | test image-F1 | image-IoU | pixel-F1 | P | R | small | 0–10 phút | báo nhầm ≥ 1 / ≥ 50 / ≥ 200 px | test SMOKE5K | SMOKE5K camera cố định |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| E0, FoSp 14k | 0,3501 | 0,5649 | 0,4523 | 0,7603 | 0,8347 | 0,6982 | 0,4713 | 0,3024 | 13,8 / 9,2 / 2,3% | 0,7694 | 0,5076 |
+| A: E1 chỉ SmokeSeg, best ở update 3750 | 0,4773 | 0,6850 | 0,5732 | 0,8364 | 0,8973 | 0,7831 | 0,5959 | 0,4681 | 25,9 / 16,1 / 8,0% | 0,7270 | 0,5769 |
+| B: E1 + SMOKE5K, best ở update 3000 | **0,4966** | 0,6572 | 0,5404 | 0,7783 | 0,7576 | 0,8002 | 0,5800 | 0,4137 | 19,5 / 8,0 / 2,3% | 0,7688 | 0,5714 |
+
+E0 chấm lại trên test SMOKE5K được 0,7694, khớp con số 76,88% của notebook FoSp 14k (chênh 0,0006).
+
+| Cặp | Chỉ số | Δ | CI 95% |
+| --- | --- | ---: | --- |
+| A − E0 | test image-F1 | +0,1202 | [+0,0720; +0,2027] |
+| A − E0 | test SMOKE5K image-F1 | −0,0424 | [−0,0627; −0,0217] |
+| A − E0 | báo nhầm ≥ 200 px | +0,0575 | [0,0000; +0,1207] |
+| A − E1 lượt 2 | test image-F1 | −0,0071 | [−0,0449; +0,0124] |
+| B − E0 | test image-F1 | +0,0923 | [+0,0407; +0,2085] |
+| B − E0 | val image-F1 | +0,1465 | [+0,0456; +0,1979] |
+| B − E0 | báo nhầm ≥ 1 px | +0,0575 | [−0,0476; +0,1364] |
+| B − E0 | báo nhầm ≥ 200 px | 0,0000 | [−0,0161; +0,0125] |
+| B − E0 | test SMOKE5K image-F1 | −0,0006 | [−0,0148; +0,0142] |
+| B − E0 | SMOKE5K camera cố định (63 ảnh) | +0,0638 | [+0,0235; +0,1058] |
+| B − A | test image-F1 | −0,0278 | [−0,0701; +0,0472] |
+| B − A | báo nhầm ≥ 1 px | −0,0632 | [−0,1474; +0,0123] |
+| B − A | báo nhầm ≥ 200 px | −0,0575 | [−0,1334; 0,0000] |
+| B − A | test SMOKE5K image-F1 | +0,0418 | [+0,0286; +0,0549] |
+| B − A | SMOKE5K camera cố định | −0,0056 | [−0,0462; +0,0339] |
+
+Trả lời hai câu hỏi của lượt này:
+1. **Thêm SMOKE5K không giúp test SmokeSeg.** B − A = −0,028, CI [−0,070; +0,047], tức chưa phân biệt được. B có val cao hơn nhưng test thấp hơn. Mask của B rộng hơn: precision theo pixel 0,7576 so với 0,8973.
+2. **Fine-tune chỉ trên SmokeSeg làm FoSp quên tập gốc.** A tụt 0,042 trên test SMOKE5K (CI [−0,063; −0,022]), còn B giữ nguyên. Cả hai nhánh cùng tăng nhóm camera cố định của SMOKE5K, khoảng +0,064 đến +0,069.
+
+Ngoài ra B báo nhầm ít hơn A: ≥ 200 px là 2,3% so với 8,0%, bằng FoSp gốc. A lặp lại được E1 lượt 2 trên laptop (−0,007, CI có 0).
+
+**Chọn nhánh:** theo quy tắc đặt trước (chỉ nhìn val), **B thắng** (0,4966 so với 0,4773). Các lượt sau dùng cấu hình dữ liệu của B. Hai điểm cộng của B, báo nhầm ít và không quên SMOKE5K, chỉ được ghi nhận, không dùng để chọn. Checkpoint `day3_s5k_b/E1_single_best.pth` được tải về `checkpoints/temporal_fosp_2026-11-07/kaggle_day3/b/`.
+
+**Lượt 5a (đẩy lên Kaggle 16:09, 07/11/2026), cấu hình dữ liệu của B:**
+- `forestwatch-day4-final`: E0 + E1 với loss soft-F1, ô cắt phóng tới 2×, 20% mẫu âm, phép dò cách chấm và ngưỡng trên val, `FW_EXAMPLES=24`. So với B, lượt này đổi ba thứ cùng lúc.
+- `forestwatch-day4-e2`: E2 (`delta`, cổng `bce`, `init_bias` 0), cùng 6000 update, kèm phép dò và hai phép tách nguồn lợi ích (no-ref, wrong-ref). Đối chứng là E1 của B: cùng dữ liệu, cùng ngân sách, cùng seed.
 
 **Phần còn thiếu để lên image-F1 0,80 (điểm từng ảnh của E1 lượt 2, test 701 ảnh)**
 
