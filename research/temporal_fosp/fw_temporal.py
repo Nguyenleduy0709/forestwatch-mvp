@@ -81,11 +81,15 @@ class TemporalFoSp(nn.Module):
     foreground conv through a zero-initialised 1x1 conv, scaled by the reliability gate w1.  At
     initialisation the model is exactly FoSp, yet the new conv receives gradients (in the convex
     pilot, w1 fell to ~1e-6).  The gate w1 is still a softmax and can still saturate towards 0, so
-    check w_obs after training."""
+    check w_obs after training.
+    fusion='delta': as 'residual', but the added term is w1*(F_observed - F_inferred).  Where the
+    reference shows no change (F_observed ~ 0) the branch can cancel FoSp's hallucinated foreground,
+    which 'residual' cannot (its input is then ~0); with obs_conv equal to FoSp's conv and no
+    activation, it would reduce to the convex mix.  Still exactly FoSp at initialisation."""
 
     def __init__(self, segmentor, num_refs=1, use_temporal=True, hidden=32, init_bias=4.0, fusion='convex'):
         super().__init__()
-        assert fusion in ('convex', 'residual'), fusion
+        assert fusion in ('convex', 'residual', 'delta'), fusion
         self.seg = segmentor
         self.head = segmentor.decode_head
         self.num_refs = num_refs
@@ -95,7 +99,7 @@ class TemporalFoSp(nn.Module):
         cue_ch = n_src + 1 + 2 * num_refs + 1   # |dF| magnitudes, focus map, image cues, has_ref
         self.arbitration = nn.ModuleList(
             [Arbitration(n_src, cue_ch, hidden, init_bias) for _ in range(len(self.head.in_channels))])
-        if fusion == 'residual':
+        if fusion in ('residual', 'delta'):
             self.obs_convs = nn.ModuleList()
             for fc in self.head.foreground_channel_convs:
                 conv = nn.Conv2d(fc.conv.in_channels * num_refs, fc.conv.out_channels, 1)
@@ -162,8 +166,10 @@ class TemporalFoSp(nn.Module):
                 weights.append(w)
                 if self.fusion == 'convex':
                     fused.append(sum(w[:, k:k + 1] * cands[k] for k in range(len(cands))))
-                else:
+                elif self.fusion == 'residual':
                     fused.append(torch.cat([w[:, k:k + 1] * cands[k] for k in range(1, len(cands))], 1))
+                else:  # delta
+                    fused.append(torch.cat([w[:, k:k + 1] * (cands[k] - cands[0]) for k in range(1, len(cands))], 1))
             if self.fusion == 'convex':
                 fg = fused
             else:
@@ -213,6 +219,29 @@ def reliability_loss(weights, valid, has_ref):
     for w in weights:
         inv = F.adaptive_max_pool2d(1.0 - valid.float(), w.shape[2:])
         total = total + (inv * w[:, 1:] * hr).mean()
+    return total / len(weights)
+
+
+def gate_bce_loss(weights, valid, has_ref, eps=1e-6):
+    """Two-sided gate supervision: BCE(w_observed, validity) on samples that have a reference.
+
+    `reliability_loss` only pushes the gate down where the reference is known to be wrong, and the
+    segmentation loss gives the gate no gradient while the zero-initialised observed branch is still
+    0, so in the Day-2 pilot (convex) and in the residual run the gate fell to ~1e-9 everywhere.
+    Here the gate is also pulled up where the reference is valid, i.e. it is trained as a
+    per-pixel reliability classifier; how much to *use* a valid reference is left to the model.
+    """
+    if not weights:
+        return valid.new_zeros((), dtype=torch.float32)
+    hr = has_ref.float().view(-1, 1, 1, 1)
+    if float(hr.sum()) == 0:
+        return valid.new_zeros((), dtype=torch.float32)
+    total = 0.0
+    for w in weights:
+        target = 1.0 - F.adaptive_max_pool2d(1.0 - valid.float(), w.shape[2:])
+        p = w[:, 1:].clamp(eps, 1 - eps)
+        bce = -(target * torch.log(p) + (1 - target) * torch.log(1 - p))
+        total = total + (bce * hr).sum() / (hr.sum() * bce[0].numel())
     return total / len(weights)
 
 
