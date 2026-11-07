@@ -120,6 +120,26 @@ print('check 3c loss', round(float(loss), 4), 'rel', round(float(rel), 6),
 assert all(g is None for g in g_mat)
 assert any(g is not None and float(g.abs().sum()) > 0 for g in g_arb)
 
+# --- residual / delta fusion: exactly FoSp at initialisation, yet gradients reach the new 1x1 convs
+for fusion in ('residual', 'delta'):
+    seg.eval()  # train-mode forwards update the shared BatchNorm statistics, so re-take FoSp's output each time
+    with torch.no_grad():
+        base_out, _, _ = wrapper(x)
+    tf = fwt.TemporalFoSp(seg, num_refs=1, use_temporal=True, init_bias=0.0, fusion=fusion).eval()
+    with torch.no_grad():
+        o, _, wf = tf(x, xr, torch.ones(1))
+    d = float((o - base_out).abs().max())
+    tf.train(); tf.head.G.eval()
+    for p in tf.parameters():
+        p.grad = None
+    o2, h2, _ = tf(x2, xr2, has)
+    fwt.fosp_loss(tf.head, o2, h2, y).backward()
+    g_obs = [float(c.weight.grad.abs().sum()) for c in tf.obs_convs]
+    print(f'check 3d {fusion}: max|out - FoSp| at init = {d:.2e}, gate = {float(wf[0][0, 1].mean()):.3f}, '
+          f'obs_conv grad L1 = {[f"{g:.2e}" for g in g_obs]}')
+    assert d < 1e-4 and all(g > 0 for g in g_obs)
+    seg.eval()
+
 # --- corruptions / cues / metrics
 rng = np.random.default_rng(0)
 cur = (np.random.rand(512, 512, 3) * 255).astype(np.uint8)
@@ -144,4 +164,15 @@ assert float(cues_same[:, 1].mean()) > 0.99 and float(cues_shift[:, 1].mean()) <
 pa = [dict(id=str(i), event=str(i % 5), f1=0.4, iou=0.3) for i in range(50)]
 pb = [dict(id=str(i), event=str(i % 5), f1=0.45, iou=0.33) for i in range(50)]
 print('check 4c bootstrap:', fwt.paired_bootstrap(pa, pb, n=200))
+# two-sided gate loss: gradient pulls the observed weight up on valid pixels, down on invalid ones, ignores no-ref samples
+logits = torch.zeros(2, 2, 8, 8, requires_grad=True)
+wg = torch.softmax(logits, 1)
+vg = torch.ones(2, 1, 8, 8)
+vg[:, :, :4] = 0
+lg = fwt.gate_bce_loss([wg], vg, torch.tensor([1.0, 0.0]))
+lg.backward()
+g1 = logits.grad[0, 1]
+print('check 4d gate_bce_loss %.4f | grad on observed logit: invalid %+.4f, valid %+.4f, no-ref sample %.1f' % (
+    float(lg), float(g1[:4].mean()), float(g1[4:].mean()), float(logits.grad[1].abs().sum())))
+assert float(g1[:4].mean()) > 0 > float(g1[4:].mean()) and float(logits.grad[1].abs().sum()) == 0
 print('ALL CPU CHECKS PASSED')

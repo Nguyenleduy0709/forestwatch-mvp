@@ -116,18 +116,83 @@ Log và output gốc lưu trên máy, ngoài Git, ở `outputs/day2_gpu/`: `fore
 - Test chỉ có 6 ngày, nên CI thô.
 - Khung âm tính là cảnh bình thường ngay trước lúc cháy, chưa phải ngày sương/mây.
 
-**Đang chạy (07/11/2026): train trên máy, RTX 5070 Laptop 8 GB, torch 2.7.1+cu128**
+**Lượt 2 (07/11/2026): train trên máy, RTX 5070 Laptop 8 GB, torch 2.7.1+cu128, E2 kiểu ghép `residual`**
 
-Code của lượt này nằm trong `research/temporal_fosp/` (`fw_temporal.py`, `train_temporal.py`, `train_local.ipynb`), commit ngay sau `cfe1665`.
+Code: commit `1d667e0` (`FW_FUSION=residual`, `FW_INIT_BIAS=0`).
 - Chạy bằng notebook (papermill). Micro-batch 1 × tích lũy 6, tức cùng 6 ảnh mỗi update như pilot.
-- Bước chạy thử, với E2 kiểu convex: 1,31 s/update cho E1 và 1,53 s/update cho E2, VRAM đỉnh 6,03 GB.
-- E1 và E2 mỗi run 6000 update (khoảng 8,5 epoch), 8 lần kiểm tra val, checkpoint chọn theo val, test chỉ chấm một lần ở cuối.
-- **E2 dùng kiểu ghép `residual`** (`FW_FUSION=residual`, `FW_INIT_BIAS=0`):
-  - Nhánh nền của FoSp giữ nguyên.
-  - Đặc trưng nền quan sát, nhân với cổng tin cậy, được cộng vào sau conv nền của FoSp qua một conv 1×1 khởi tạo bằng 0.
-  - Đã kiểm trên GPU: tại khởi tạo, mô hình trùng FoSp (sai khác lớn nhất 0,0 trên ảnh test thật), cổng bằng 0,5 và conv mới nhận gradient ở cả 4 tầng.
-  - Kiểu `convex` của pilot vẫn giữ để tái lập.
+- E1 và E2 mỗi run 6000 update (khoảng 8,5 epoch), 8 lần kiểm tra val, checkpoint chọn theo val image-F1, test chỉ chấm một lần ở cuối.
+- Kiểu `residual`: nhánh nền của FoSp giữ nguyên; đặc trưng nền quan sát, nhân với cổng tin cậy, được cộng vào sau conv nền của FoSp qua một conv 1×1 khởi tạo bằng 0. Tại khởi tạo mô hình trùng FoSp (sai khác lớn nhất 0,0 trên ảnh test thật).
 - Bảo vệ laptop: khi GPU ≥ 90 °C trong khoảng 1 phút thì tạm dừng, chờ nguội về 75 °C rồi chạy tiếp. Cứ 75 phút train thì nghỉ 10 phút. Thời gian dừng và nghỉ không tính vào ngân sách.
+- Thời gian: E1 129 phút (1,17 s/update), E2 174 phút (1,54 s/update), VRAM đỉnh 6,03 GB, GPU khoảng 81 °C khi train.
+
+Kết quả trên test (701 ảnh, 6 ngày) và trên 174 khung không khói thật:
+
+| | image-F1 | image-IoU | pixel-F1 | P | R | small | 0–10 phút | báo nhầm ≥ 1 / ≥ 200 px |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| E1, best ở update 4500 | 0,6921 | 0,5836 | 0,8514 | 0,9010 | 0,8070 | 0,6024 | 0,4553 | 24,7 / 12,1% |
+| E2 residual, best ở update 6000 | 0,6718 | 0,5626 | 0,8239 | 0,9080 | 0,7540 | 0,5830 | 0,4396 | 32,2 / 12,6% |
+
+Bootstrap ghép cặp theo ngày (`research/temporal_fosp/tools/compare_runs.py` cho các cặp khác lượt):
+
+| Cặp | Chỉ số | Δ | CI 95% |
+| --- | --- | ---: | --- |
+| E2 residual − E1 | test image-F1 | −0,0203 | [−0,0387; −0,0113] |
+| E2 residual − E1 | val image-F1 | +0,0039 | [−0,0297; +0,0201] |
+| E2 residual − E1 | báo nhầm ≥ 1 px | +0,0747 | [+0,0069; +0,2174] |
+| E1 lượt 2 − E1 pilot | test image-F1 | +0,0302 | [+0,0072; +0,0653] |
+| E1 lượt 2 − E0 | test image-F1 | +0,1272 | [+0,0758; +0,2190] |
+| E1 lượt 2 − E0 | báo nhầm ≥ 1 px | +0,1092 | [+0,0064; +0,2037] |
+
+Nhận xét:
+1. **Cổng lại tắt.** w_obs ở tầng cuối trên test là 7·10⁻¹² ở vùng khói và 6·10⁻⁹ ở nền; E2, E2 no-ref và E2 wrong-ref trùng nhau. Loss tin cậy về khoảng 0 từ update 300. Vậy E2 kém E1 không phải do nền quan sát, mà do quỹ đạo train của phần FoSp khác đi.
+2. **Nguyên nhân, áp dụng cho cả convex và residual:** `reliability_loss` chỉ đẩy cổng xuống ở pixel biết là hỏng. Lúc đầu conv của nhánh nền bằng 0 nên loss phân đoạn không cho cổng gradient nào. Không có lực kéo lên, cổng xuống 0 rồi softmax bão hòa.
+3. E1 dài hơn E1 pilot (+0,030, nhưng khác cả số update lẫn máy). So với E0, fine-tune tăng F1 rõ nhưng tỉ lệ báo nhầm ≥ 1 px tăng 10,9 điểm, vì train không có mẫu âm nào.
+
+Checkpoint E1, log, `per_image.json` và `thermal.csv` được giữ trong gói `checkpoints/temporal_fosp_2026-11-07/e1_u6000/` (ngoài Git). Checkpoint E2 residual đã xoá vì cổng tắt, model tương đương FoSp.
+
+**Lượt 3 (07/11/2026, dừng giữa chừng): mẫu âm khi train, cổng giám sát hai chiều, kiểu ghép `delta`**
+
+Kế hoạch là E1 và E2 cùng 6000 update, cùng dữ liệu, cùng mẫu âm. E1 chạy đủ 6000 update. Lượt chạy được dừng theo yêu cầu khi E2 mới ở update 300, để chuyển hẳn việc train sang Kaggle. Lúc đó w_obs của E2 là 0,72, tức cổng chưa tắt, nhưng chưa có kết quả E2.
+
+| | val image-F1 | test image-F1 | image-IoU | pixel-F1 | P | R | small | 0–10 phút | báo nhầm ≥ 1 / ≥ 50 / ≥ 200 px |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| E1 lượt 2, không mẫu âm, best ở update 4500 | 0,4777 | 0,6921 | 0,5836 | 0,8514 | 0,9010 | 0,8070 | 0,6024 | 0,4553 | 24,7 / 19,0 / 12,1% |
+| E1 + 20% mẫu âm, best ở update 5250 | 0,4748 | 0,6860 | 0,5726 | 0,8334 | 0,8696 | 0,8001 | 0,6028 | 0,4787 | 15,5 / 9,8 / 5,7% |
+
+Mẫu âm giảm tỉ lệ khung báo nhầm khoảng một nửa (≥ 1 px: 24,7% → 15,5%; ≥ 200 px: 12,1% → 5,7%), còn test image-F1 chênh −0,006. **Chưa có CI** cho cặp này: lượt chạy dừng trước khi ghi `per_image.json`. Checkpoint còn trong gói `checkpoints/temporal_fosp_2026-11-07/e1_neg20_u6000/`, nên có thể chấm lại để tính bootstrap.
+
+Thiết kế của lượt 3:
+- **Mẫu âm khi train** (`FW_TRAIN_NEG=0.2`, cho cả E1 và E2): 20% mẫu train được thay bằng chính ảnh nền trước lúc cháy của ảnh đó (trung vị khung 20–40 phút trước khi cháy), mask rỗng. Ảnh nền của mẫu âm lấy từ một ảnh khác cùng chuỗi có phép nắn lệch ≤ 1,5 px; 3853/4218 ảnh train có cặp như vậy. Không dùng khung nào của val/test.
+- **Cổng giám sát hai chiều** (`FW_GATE_LOSS=bce`): BCE giữa trọng số nền quan sát và bản đồ hợp lệ của ảnh nền (1 nếu hợp lệ, 0 ở vùng bị làm hỏng), chỉ tính trên mẫu có ảnh nền. Cổng thành bộ phân loại độ tin cậy; mức dùng ảnh nền hợp lệ do conv nhánh nền quyết định.
+- **Kiểu ghép `delta`** (`FW_FUSION=delta`): nhánh nền nhận w·(F_quan sát − F_suy luận) thay vì w·F_quan sát. Ở nơi ảnh nền cho thấy không đổi, nhánh này có thể triệt tiêu phần nền suy luận sai của FoSp, điều mà `residual` không làm được. Tại khởi tạo vẫn trùng FoSp.
+- Theo dõi thêm: w_obs trong log TRAIN và VAL; tỉ lệ báo nhầm trên 60 khung âm của val ở mỗi lần kiểm tra (chỉ để theo dõi, checkpoint vẫn chọn theo val image-F1); bootstrap theo ngày cho báo nhầm.
+- Hạn chế: ảnh âm là ảnh trung vị nên mịn hơn khung thật, và cặp âm gần như trùng khít (độ lệch trung vị của cặp gần nhất 0,07 px). Lượt này đổi ba thứ cùng lúc, nên E2 − E1 cho biết tác dụng của nhánh nền khi có mẫu âm, còn từng thay đổi cần ablation riêng.
+
+**Vì sao FoSp đạt 76,88% trên SMOKE5K nhưng thấp hơn ở đây**
+
+Con số 76,88% là image-F1 của FoSp 14k trên 400 ảnh test SMOKE5K, chấm ở độ phân giải mask gốc. Trên 468 ảnh val tách từ train SMOKE5K, F1 là 0,9024. Cách đo giống phần này: F1 trung bình theo ảnh, ngưỡng 0,4.
+- Trong 400 ảnh test đó, 63 ảnh camera cố định (HPWREN/FIgLib, tên `<timestamp>_<offset>`) chỉ đạt F1 0,5076. 337 ảnh còn lại đạt 0,8176.
+- Trên test SmokeSeg của mình (khói sớm, chia theo ngày), cùng FoSp đó (E0) đạt 0,5649. Số này gần với nhóm camera cố định của SMOKE5K.
+
+Vậy khoảng cách đến từ dữ liệu, không phải do cách đo.
+
+**Lượt 4 (07/11/2026, đang chạy trên Kaggle): thêm SMOKE5K vào train**
+
+Từ lượt này chỉ train trên Kaggle. Có hai notebook private trên T4, chạy song song, khác nhau duy nhất ở dữ liệu train:
+- **A** (`forestwatch-day3-s5k-a`): chỉ SmokeSeg (4218 ảnh).
+- **B** (`forestwatch-day3-s5k-b`): SmokeSeg cộng 4589 cặp train SMOKE5K, tức bộ FoSp 14k đã học. Các cặp SMOKE5K chiếm khoảng 52% số mẫu.
+
+Điểm chung của A và B:
+- Mỗi nhánh có E0 và E1, mỗi run 6000 update × 6 ảnh (micro-batch 2 × tích lũy 3), 8 lần kiểm tra val, checkpoint chọn theo val image-F1 của SmokeSeg.
+- Không dùng mẫu âm khi train, để chỉ đổi một yếu tố.
+- Chấm trên test SmokeSeg (701 ảnh), 174 khung không khói, và test SMOKE5K (400 ảnh ở độ phân giải gốc, cùng cách ra 76,88%). Nhóm 63 ảnh camera cố định được tách riêng.
+- Không đoạn quay nào của SMOKE5K trùng train/val/test của mình (đã kiểm tra trên hai manifest).
+
+Câu hỏi của lượt này:
+1. Thêm SMOKE5K có giúp test SmokeSeg không, khi cùng ngân sách update?
+2. Fine-tune trên SmokeSeg có làm mất độ chính xác trên SMOKE5K không?
+
+Code: `FW_S5K_TRAIN`, `FW_S5K_EVAL` trong `train_temporal.py`; notebook dựng bằng `research/temporal_fosp/make_kaggle_notebook.py --preset day3-s5k-a|day3-s5k-b`.
 
 **Sau lượt này**
 - Đánh giá K-fold nhóm theo trạm.

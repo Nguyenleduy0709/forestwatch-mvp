@@ -10,6 +10,7 @@ import collections
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import time
@@ -44,6 +45,18 @@ for _key, _env in (('micro_batch', 'FW_MICRO_BATCH'), ('accumulate', 'FW_ACCUM')
 CFG['fusion'] = os.environ.get('FW_FUSION', 'convex')          # 'residual' = zero-init additive observed branch
 if os.environ.get('FW_INIT_BIAS'):
     CFG['init_bias'] = float(os.environ['FW_INIT_BIAS'])        # arbitration prior towards FoSp's own background
+# Share of training samples replaced by a smoke-free scene: the image's own pre-ignition reference (empty mask),
+# paired with the reference of another image of the same sequence.  Same share for E1 and E2.
+CFG['train_neg'] = float(os.environ.get('FW_TRAIN_NEG', 0))
+# Gate supervision: 'one_sided' (pilot: penalise weight on known-invalid pixels only) or 'bce' (also pull it up on valid ones).
+CFG['gate_loss'] = os.environ.get('FW_GATE_LOSS', 'one_sided')
+assert CFG['gate_loss'] in ('one_sided', 'bce'), CFG['gate_loss']
+# SMOKE5K (the data FoSp-14k was trained on): FW_S5K_TRAIN=1 adds its 4589 training pairs to the training rows
+# (no reference frame, so E2 sees them as no-history samples); FW_S5K_EVAL=1 also scores every model on the
+# official 400-image SMOKE5K test at native mask resolution (FoSp's own protocol).  Checkpoint selection stays
+# SmokeSeg val image-F1.  No SMOKE5K recording overlaps our SmokeSeg train/val/test (checked on the manifests).
+CFG['s5k_train'] = os.environ.get('FW_S5K_TRAIN') == '1'
+S5K_EVAL = os.environ.get('FW_S5K_EVAL') == '1' or CFG['s5k_train']
 WORKERS = int(os.environ.get('FW_WORKERS', 0 if DRY else 3))   # use 0 on Windows (spawn re-runs this script)
 EVAL_BATCH = int(os.environ.get('FW_EVAL_BATCH', 4))
 FIXED_UPDATES = int(os.environ.get('FW_UPDATES', 0)) or None    # same update count for E1 and E2, no E1 time budget
@@ -171,6 +184,10 @@ def build(use_temporal, init=None):
     model = fwt.TemporalFoSp(seg, num_refs=1, use_temporal=use_temporal, init_bias=CFG['init_bias'],
                              fusion=CFG['fusion'] if use_temporal else 'convex').cuda()
     if init:  # warm start from an earlier run of the same variant (*_best.pth written by train())
+        if not Path(init).is_file():  # a pattern under the inputs, e.g. 'day3_s5k_b/E1_single_best.pth'
+            hits = sorted(q for q in INP.rglob(init) if q.is_file())
+            assert len(hits) == 1, f'FW_INIT {init!r}: {len(hits)} matches under {INP}: {hits[:3]}'
+            init = hits[0]
         state = torch.load(init, map_location='cpu', weights_only=True)
         assert bool(state.get('use_temporal')) == use_temporal, f'{init}: use_temporal mismatch'
         model.load_state_dict(state['state_dict'], strict=True)
@@ -199,13 +216,58 @@ PREP = MF.parent
 manifest = json.loads(MF.read_text())
 train_rows, val_rows, test_rows = manifest['train'], manifest['val'], manifest['test']
 neg_rows = [n for n in manifest['negatives'] if n['split'] in ('val', 'test')]
+val_neg_rows = [n for n in neg_rows if n['split'] == 'val']
 if os.environ.get('FW_LIMIT'):  # smoke test only: first N rows of every split
     _n = int(os.environ['FW_LIMIT'])
     train_rows, val_rows, test_rows, neg_rows = train_rows[:_n], val_rows[:_n], test_rows[:_n], neg_rows[:_n]
+    val_neg_rows = val_neg_rows[:_n]
 for name, rows in (('train', train_rows), ('val', val_rows), ('test', test_rows)):
     log('DATA', split=name, images=len(rows), with_ref=sum(bool(r.get('ref')) for r in rows),
         events=len({r['event'] for r in rows}), day1_pairs=sum(bool(r.get('day1_pair')) for r in rows))
 log('DATA', split='negatives', images=len(neg_rows), with_ref=sum(bool(n.get('ref')) for n in neg_rows), seconds=round(elapsed()))
+
+
+def _find_s5k_root():
+    for base in (INP, TMP):
+        for p in base.rglob('img'):
+            if p.parent.name == 'train' and (p.parent.parent / 'test' / 'gt_').is_dir() and p.parent.parent.name == 'SMOKE5K':
+                return p.parent.parent
+    return None
+
+
+S5K_TRAIN, S5K_TEST = [], []
+if CFG['s5k_train'] or S5K_EVAL:
+    # Same rows as FoSp-14k: its manifest (train = 4589 pairs after its own validation holdout, test = 400).
+    _s5k = json.loads((CKPT.parent / 'manifest.json').read_text())
+    S5K_ROOT = Path(os.environ['FW_S5K_ROOT']) if os.environ.get('FW_S5K_ROOT') else _find_s5k_root()
+    if S5K_ROOT is None:  # not attached as an input: the authors' archive, as in the FoSp-SMOKE5K notebook
+        import gdown
+        _zip = TMP / 'SMOKE5K.zip'
+        if not _zip.is_file():
+            gdown.download(id=_s5k['report']['source_archive_id'], output=str(_zip), quiet=True)
+        with zipfile.ZipFile(_zip) as z:
+            for n in z.namelist():
+                assert (TMP / 'SMOKE5K-official' / n).resolve().is_relative_to((TMP / 'SMOKE5K-official').resolve())
+            z.extractall(TMP / 'SMOKE5K-official')
+        S5K_ROOT = _find_s5k_root()
+    assert S5K_ROOT is not None, 'SMOKE5K not found'
+
+    def _s5k_rows(split):
+        rows = []
+        for r in _s5k[split]:
+            rel = lambda p: S5K_ROOT / p.replace('\\', '/').split('/SMOKE5K/', 1)[1]  # noqa: E731
+            rows.append(dict(id='s5k:' + r['id'], src='s5k', image=str(rel(r['image'])), mask=str(rel(r['mask'])),
+                             event=r['group'], seq='s5k:' + r['group'], offset=-1, day1_pair=False,
+                             cam=re.fullmatch(r'\d{10}_[+-]\d{5}', r['id']) is not None))  # fixed-camera frame
+        return rows
+    S5K_TRAIN = _s5k_rows('train') if CFG['s5k_train'] else []
+    S5K_TEST = _s5k_rows('test') if S5K_EVAL else []
+    if os.environ.get('FW_LIMIT'):
+        S5K_TRAIN, S5K_TEST = S5K_TRAIN[:int(os.environ['FW_LIMIT'])], S5K_TEST[:int(os.environ['FW_LIMIT'])]
+    _missing = [r['id'] for r in S5K_TRAIN + S5K_TEST if not (Path(r['image']).is_file() and Path(r['mask']).is_file())]
+    assert not _missing, f'SMOKE5K files missing: {len(_missing)}, e.g. {_missing[:3]}'
+    log('DATA', split='smoke5k', root=str(S5K_ROOT), train=len(S5K_TRAIN), test=len(S5K_TEST),
+        test_camera=sum(r['cam'] for r in S5K_TEST), seconds=round(elapsed()))
 
 MEAN, STD = fwt.MEAN, fwt.STD
 BIL, NEAR = Image.Resampling.BILINEAR, Image.Resampling.NEAREST
@@ -224,10 +286,34 @@ for r in train_rows:
 log('DONORS', n=len(donors), seconds=round(elapsed()))
 
 
+def _crop_shift(ma, mb, size=512):
+    """Largest displacement (crop pixels) between two crop->frame affines over the crop corners."""
+    a, b = np.asarray(ma, np.float64), np.asarray(mb, np.float64)
+    corners = np.array([[0, 0, 1], [size, 0, 1], [0, size, 1], [size, size, 1]], np.float64)
+    scale = abs(np.linalg.det(a[:, :2])) ** 0.5
+    return float(np.abs(corners @ (a - b).T).max() / scale)
+
+
+# Training negatives: partner = another image of the same sequence whose reference is aligned with this
+# one to <= 1.5 px, so (current, reference) is a smoke-free pair with only registration noise.
+NEG_PARTNER = []
+if CFG['train_neg'] > 0:
+    _by_seq = collections.defaultdict(list)
+    for _i, _r in enumerate(train_rows):
+        if _r.get('ref') and _r.get('M') is not None:
+            _by_seq[_r['seq']].append(_i)
+    for _i, _r in enumerate(train_rows):
+        same = [j for j in _by_seq.get(_r['seq'], []) if j != _i and _crop_shift(_r['M'], train_rows[j]['M']) <= 1.5]
+        NEG_PARTNER.append(same)
+    log('TRAIN_NEG', share=CFG['train_neg'], rows_with_ref=sum(bool(r.get('ref')) for r in train_rows),
+        with_partner=sum(bool(p) for p in NEG_PARTNER), seconds=round(elapsed()))
+
+
 class SmokeSet(torch.utils.data.Dataset):
-    def __init__(self, rows, train=False, corrupt=False, negatives=False, swap_ref=None):
+    def __init__(self, rows, train=False, corrupt=False, negatives=False, swap_ref=None, neg_share=0.0):
         self.rows, self.train, self.corrupt, self.negatives = rows, train, corrupt, negatives
         self.swap_ref = swap_ref  # {seq: ref of a *different* camera} for the wrong-reference test
+        self.neg_share = neg_share if train else 0.0  # training negatives, see NEG_PARTNER
 
     def __len__(self):
         return len(self.rows)
@@ -238,9 +324,21 @@ class SmokeSet(torch.utils.data.Dataset):
 
     def __getitem__(self, i):
         r = self.rows[i]
-        img = self._img((PREP if self.negatives else SEG) / r['image'])
-        mask = Image.fromarray(np.zeros((512, 512), np.uint8)) if self.negatives else Image.fromarray(mask_array(SEG / r['mask']).astype(np.uint8))
-        seq_ref = r.get('ref')  # per-image registered reference (None -> no usable history)
+        if self.neg_share and r.get('ref') and random.random() < self.neg_share:
+            # smoke-free scene: this image's own pre-ignition reference, empty mask
+            img = self._img(PREP / r['ref'])
+            mask = Image.fromarray(np.zeros((512, 512), np.uint8))
+            partners = NEG_PARTNER[i] if i < len(NEG_PARTNER) else []
+            seq_ref = self.rows[random.choice(partners)]['ref'] if partners else r['ref']
+        elif r.get('src') == 's5k':  # SMOKE5K pair: white (255) = smoke, no ignore label, no history
+            img = self._img(r['image'])
+            with Image.open(r['mask']) as m:
+                mask = Image.fromarray((np.asarray(m.convert('L').resize((512, 512), NEAR)) > 127).astype(np.uint8))
+            seq_ref = None
+        else:
+            img = self._img((PREP if self.negatives else SEG) / r['image'])
+            mask = Image.fromarray(np.zeros((512, 512), np.uint8)) if self.negatives else Image.fromarray(mask_array(SEG / r['mask']).astype(np.uint8))
+            seq_ref = r.get('ref')  # per-image registered reference (None -> no usable history)
         if self.swap_ref is not None:
             seq_ref = self.swap_ref.get(r['seq'])
         has = seq_ref is not None
@@ -284,6 +382,33 @@ def worker_init(wid):
 def loader(ds, batch, shuffle):
     return torch.utils.data.DataLoader(ds, batch_size=batch, shuffle=shuffle, num_workers=WORKERS, drop_last=shuffle,
                                        pin_memory=not DRY, persistent_workers=shuffle and WORKERS > 0, worker_init_fn=worker_init)
+
+
+@torch.no_grad()
+def evaluate_s5k(model, rows, use_temporal, label):
+    """SMOKE5K test as in FoSp-SMOKE5K: 512 input, logits resized to the native mask, mask > 127 = smoke."""
+    model.eval()
+    out = []
+    for r in rows:
+        with Image.open(r['image']) as im:
+            a = np.asarray(im.convert('RGB').resize((512, 512), BIL), np.float32)
+        with Image.open(r['mask']) as m:
+            gt = np.asarray(m.convert('L')) > 127
+        x = torch.from_numpy(((a - MEAN) / STD).transpose(2, 0, 1).copy())[None].cuda()
+        has = torch.zeros(1).cuda()  # no history: E2 falls back to the FoSp path exactly
+        logits, _, _ = model(x, x[:, None] if use_temporal else None, has)
+        prob = torch.sigmoid(F.interpolate(logits, size=gt.shape, mode='bilinear', align_corners=False))[0, 0].cpu().numpy()
+        s = fwt.image_scores(prob > CFG['threshold'], gt)
+        s.update(id=r['id'], event=r['event'], cam=r['cam'])
+        out.append(s)
+    return out
+
+
+def report_s5k(tag, rows):
+    payload = dict(all=fwt.summarize(rows), camera=fwt.summarize([r for r in rows if r['cam']]),
+                   other=fwt.summarize([r for r in rows if not r['cam']]))
+    log(tag, **payload)
+    return payload
 
 
 @torch.no_grad()
@@ -350,7 +475,8 @@ def train(name, use_temporal, updates=None, budget=None, init=None):
     model = build(use_temporal, init)
     groups, params = param_groups(model, use_temporal)
     opt = torch.optim.AdamW(groups, lr=CFG['base_lr'], weight_decay=0.01)
-    it = iter(loader(SmokeSet(train_rows, train=True, corrupt=use_temporal), CFG['micro_batch'], True))
+    train_set = SmokeSet(train_rows + S5K_TRAIN, train=True, corrupt=use_temporal, neg_share=CFG['train_neg'])
+    it = iter(loader(train_set, CFG['micro_batch'], True))
     best, best_state, history, started = -1.0, None, [], time.time()
     paused0, best_update = PAUSED[0], None
     target = updates or CFG['max_updates']
@@ -363,20 +489,21 @@ def train(name, use_temporal, updates=None, budget=None, init=None):
         for g in opt.param_groups:
             g['lr'] = CFG['base_lr'] * g['lr_multiplier'] * factor
         opt.zero_grad(set_to_none=True)
-        tot = rel_tot = 0.0
+        tot = rel_tot = w_tot = 0.0
         for _ in range(CFG['accumulate']):
             try:
                 x, xr, has, valid, y, _ = next(it)
             except StopIteration:
-                it = iter(loader(SmokeSet(train_rows, train=True, corrupt=use_temporal), CFG['micro_batch'], True))
+                it = iter(loader(train_set, CFG['micro_batch'], True))
                 x, xr, has, valid, y, _ = next(it)
             x, xr, has, valid, y = (t.cuda(non_blocking=True) for t in (x, xr, has, valid, y))
             out, hier, w = model(x, xr if use_temporal else None, has)
             loss = fwt.fosp_loss(model.head, out, hier, y)
             if use_temporal and w:
-                rel = fwt.reliability_loss(w, valid, has)
+                rel = (fwt.gate_bce_loss if CFG['gate_loss'] == 'bce' else fwt.reliability_loss)(w, valid, has)
                 loss = loss + CFG['rel_weight'] * rel
                 rel_tot += float(rel.detach()) / CFG['accumulate']
+                w_tot += float(w[-1][:, 1:].detach().mean()) / CFG['accumulate']  # gate on the finest scale
             if not torch.isfinite(loss):
                 raise FloatingPointError(f'{name}: non-finite loss at update {u}')
             (loss / CFG['accumulate']).backward()
@@ -391,11 +518,18 @@ def train(name, use_temporal, updates=None, budget=None, init=None):
         if evals is None and u >= 20:
             evals = {int(target * (k + 1) / CFG['n_val_evals']) for k in range(CFG['n_val_evals'])}
         if u == 1 or u % 50 == 0:
-            log('TRAIN', run=name, update=u, of=target, loss=round(tot, 5), rel=round(rel_tot, 5), sec_per_update=round(spu, 3),
+            log('TRAIN', run=name, update=u, of=target, loss=round(tot, 5), rel=round(rel_tot, 5), w_obs=float(f'{w_tot:.3g}'),
+                sec_per_update=round(spu, 3),
                 peak_gb=round(torch.cuda.max_memory_allocated() / 2 ** 30, 2), elapsed_min=round(elapsed() / 60, 1))
         if evals and u in evals:
             rows = evaluate(model, val_rows, use_temporal, name + '_val')
             summ = fwt.summarize(rows)
+            ws = [r['w_obs_smoke'] for r in rows if r.get('w_obs_smoke') is not None]
+            if ws:  # gate on the observed background (finest scale); ~0 everywhere = branch switched off
+                summ.update(w_obs_smoke=float(np.mean(ws)), w_obs_bg=float(np.mean([r['w_obs_bg'] for r in rows if 'w_obs_bg' in r])))
+            if val_neg_rows:  # monitoring only: the checkpoint is still chosen by val image-F1
+                nr = evaluate(model, val_neg_rows, use_temporal, name + '_valneg', negatives=True)
+                summ.update(val_fa_any=float(np.mean([x['fa_any'] for x in nr])), val_fa_200=float(np.mean([x['fa_200'] for x in nr])))
             history.append(dict(update=u, **summ))
             log('VAL', run=name, update=u, **summ)
             if summ['image_f1'] > best:
@@ -431,6 +565,9 @@ try:
         for s in ('val', 'test'):
             report('RESULT_E0_' + s, results['E0'][s])
         report('RESULT_E0_neg', results['E0']['neg'], negatives=True)
+        if S5K_TEST:
+            results['E0']['s5k'] = evaluate_s5k(m0, S5K_TEST, False, 'E0_s5k')
+            report_s5k('RESULT_E0_s5k', results['E0']['s5k'])
         del m0; torch.cuda.empty_cache()
 
     if 'E1' in RUNS:
@@ -442,6 +579,9 @@ try:
         for s in ('val', 'test'):
             report('RESULT_E1_' + s, results['E1'][s])
         report('RESULT_E1_neg', results['E1']['neg'], negatives=True)
+        if S5K_TEST:
+            results['E1']['s5k'] = evaluate_s5k(m1, S5K_TEST, False, 'E1_s5k')
+            report_s5k('RESULT_E1_s5k', results['E1']['s5k'])
         del m1; torch.cuda.empty_cache()
 
     if 'E2' not in RUNS:
@@ -453,6 +593,9 @@ try:
     for s in ('val', 'test'):
         report('RESULT_E2_' + s, results['E2'][s])
     report('RESULT_E2_neg', results['E2']['neg'], negatives=True)
+    if S5K_TEST:
+        results['E2']['s5k'] = evaluate_s5k(m2, S5K_TEST, True, 'E2_s5k')
+        report_s5k('RESULT_E2_s5k', results['E2']['s5k'])
     # Where does the gain come from?  (a) same E2 weights, history switched off -> pure FoSp path;
     # (b) reference taken from a different camera -> reliability should fall back gracefully.
     if elapsed() < TOTAL_BUDGET - 6 * 60:
@@ -468,11 +611,15 @@ try:
 finally:
     for a, b in (('E0', 'E1'), ('E1', 'E2'), ('E0', 'E2'), ('E1', 'E2_noref'), ('E1', 'E2_wrongref'), ('E2_noref', 'E2')):
         if a in results and b in results:
-            for s in ('val', 'test'):
+            for s in ('val', 'test', 's5k'):
                 if s not in results[a] or s not in results[b]:
                     continue
                 for key in ('f1', 'iou'):
                     log('BOOTSTRAP', pair=f'{b}-{a}', split=s, metric='image_' + key,
                         **fwt.paired_bootstrap(results[a][s], results[b][s], key=key, group='event'))
+            if 'neg' in results[a] and 'neg' in results[b]:  # false alarms on real smoke-free frames (lower is better)
+                for key in ('fa_any', 'fa_200'):
+                    log('BOOTSTRAP', pair=f'{b}-{a}', split='neg', metric=key,
+                        **fwt.paired_bootstrap(results[a]['neg'], results[b]['neg'], key=key, group='event'))
     (OUT / 'per_image.json').write_text(json.dumps(results, default=str))
     log('ALL_DONE', minutes=round(elapsed() / 60, 1), runs=list(results))
