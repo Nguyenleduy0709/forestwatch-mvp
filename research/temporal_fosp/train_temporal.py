@@ -37,7 +37,27 @@ E1_TRAIN_BUDGET = float(os.environ.get('FW_E1_BUDGET', 35 * 60))
 CFG = dict(micro_batch=2, accumulate=3, base_lr=6e-5, warmup=100, max_updates=3000, threshold=0.4,
            rel_weight=0.5, seed=42, n_val_evals=2, init_bias=2.5)
 CFG['max_updates'] = int(os.environ.get('FW_MAX_UPDATES', CFG['max_updates']))
+# Local / continued runs (unset -> identical to the Kaggle pilot).
+for _key, _env in (('micro_batch', 'FW_MICRO_BATCH'), ('accumulate', 'FW_ACCUM'), ('n_val_evals', 'FW_N_VAL_EVALS')):
+    if os.environ.get(_env):
+        CFG[_key] = int(os.environ[_env])
+CFG['fusion'] = os.environ.get('FW_FUSION', 'convex')          # 'residual' = zero-init additive observed branch
+if os.environ.get('FW_INIT_BIAS'):
+    CFG['init_bias'] = float(os.environ['FW_INIT_BIAS'])        # arbitration prior towards FoSp's own background
+WORKERS = int(os.environ.get('FW_WORKERS', 0 if DRY else 3))   # use 0 on Windows (spawn re-runs this script)
+EVAL_BATCH = int(os.environ.get('FW_EVAL_BATCH', 4))
+FIXED_UPDATES = int(os.environ.get('FW_UPDATES', 0)) or None    # same update count for E1 and E2, no E1 time budget
+RUNS = [r.strip() for r in os.environ.get('FW_RUNS', 'E0,E1,E2').split(',')]
+INIT = {'E1': os.environ.get('FW_INIT_E1'), 'E2': os.environ.get('FW_INIT_E2')}  # warm start from *_best.pth
+NO_PIP = os.environ.get('FW_NO_PIP') == '1'
+assert 'E1' in RUNS or FIXED_UPDATES or 'E2' not in RUNS, 'E2 without E1 needs FW_UPDATES'
+# Laptop protection: pause (never kill) so E1 and E2 still get the same number of updates.
+THERMAL_MAX = float(os.environ.get('FW_THERMAL_MAX', 0))        # pause when GPU temp >= this twice in a row (~1 min); 0 = off
+THERMAL_RESUME = float(os.environ.get('FW_THERMAL_RESUME', 75))  # resume once the GPU has cooled to this
+REST_EVERY = float(os.environ.get('FW_REST_EVERY', 0))          # seconds of training between rests; 0 = off
+REST_SECONDS = float(os.environ.get('FW_REST_SECONDS', 600))
 FW_SRC = r'''__FW_TEMPORAL_SOURCE__'''
+PAUSED = [0.0]  # seconds spent in thermal pauses / rests, excluded from the time budget
 
 
 def log(tag, **kw):
@@ -45,33 +65,83 @@ def log(tag, **kw):
 
 
 def elapsed():
-    return time.time() - T0
+    return time.time() - T0 - PAUSED[0]
+
+
+def gpu_status():
+    """(temperature °C or None, [power W, SM clock MHz, utilisation %]) from nvidia-smi."""
+    try:
+        line = subprocess.run(['nvidia-smi', '--query-gpu=temperature.gpu,power.draw,clocks.sm,utilization.gpu',
+                               '--format=csv,noheader,nounits'], capture_output=True, text=True, timeout=10).stdout.strip().splitlines()[0]
+        vals = [v.strip() for v in line.split(',')]
+        return float(vals[0]), vals[1:]
+    except Exception:  # noqa: BLE001 - monitoring must never break training
+        return None, []
+
+
+class ThermalGuard:
+    def __init__(self):
+        self.last_check, self.hot, self.since_rest = 0.0, 0, time.time()
+
+    def _sleep(self, seconds):
+        time.sleep(seconds)
+        PAUSED[0] += seconds
+
+    def step(self, run, update):
+        if REST_EVERY and time.time() - self.since_rest >= REST_EVERY:
+            log('REST', run=run, update=update, seconds=REST_SECONDS, temp=gpu_status()[0])
+            self._sleep(REST_SECONDS)
+            self.since_rest = time.time()
+        if not THERMAL_MAX or time.time() - self.last_check < 30:
+            return
+        self.last_check = time.time()
+        temp, rest = gpu_status()
+        with open(OUT / 'thermal.csv', 'a', encoding='utf-8') as f:
+            f.write(','.join([str(round(elapsed())), run, str(update), str(temp)] + rest) + '\n')
+        self.hot = self.hot + 1 if temp is not None and temp >= THERMAL_MAX else 0
+        if self.hot < 2:
+            return
+        log('THERMAL_PAUSE', run=run, update=update, temp=temp)
+        started = time.time()
+        while temp is not None and temp > THERMAL_RESUME and time.time() - started < 1800:
+            self._sleep(30)
+            temp, _ = gpu_status()
+        log('THERMAL_RESUME', run=run, update=update, temp=temp, paused_s=round(time.time() - started))
+        self.hot, self.last_check = 0, time.time()
+
+
+GUARD = ThermalGuard()
 
 
 random.seed(CFG['seed']); np.random.seed(CFG['seed']); torch.manual_seed(CFG['seed'])
 assert torch.cuda.is_available() or DRY, 'enable GPU'
 torch.backends.cudnn.benchmark = True
 TMP = ROOT / 'temp'; TMP.mkdir(exist_ok=True)
-OUT = ROOT / 'working' / 'fw_day2_run'; OUT.mkdir(parents=True, exist_ok=True)
+OUT = Path(os.environ['FW_OUT']) if os.environ.get('FW_OUT') else ROOT / 'working' / 'fw_day2_run'
+OUT.mkdir(parents=True, exist_ok=True)
 (TMP / 'fw_temporal.py').write_text(FW_SRC)
 sys.path.insert(0, str(TMP))
 import fw_temporal as fwt  # noqa: E402
 
 # ------------------------------------------------------------------ FoSp environment (as in the user's notebooks)
 INP = ROOT / 'input'
-repo = next(INP.rglob('FoSp-official/config/fosp_config.py')).parent.parent
+if os.environ.get('FW_FOSP_REPO'):
+    repo = Path(os.environ['FW_FOSP_REPO'])
+else:
+    repo = next(INP.rglob('FoSp-official/config/fosp_config.py')).parent.parent
 snapshot = repo.parent
-mmcv_dir = snapshot / 'mmcv-1.6.2-source'
+mmcv_dir = Path(os.environ['FW_MMCV_DIR']) if os.environ.get('FW_MMCV_DIR') else snapshot / 'mmcv-1.6.2-source'
 if not (mmcv_dir / 'mmcv').is_dir():
     mmcv_dir = TMP / 'mmcv'
     if not (mmcv_dir / 'mmcv').is_dir():
         subprocess.run(['git', 'clone', '--depth', '1', '--branch', 'v1.6.2', 'https://github.com/open-mmlab/mmcv.git', str(mmcv_dir)], check=True)
-deps = next((p.parent.parent for p in INP.rglob('fosp-deps/timm/__init__.py')), None)
+deps = Path(os.environ['FW_DEPS_DIR']) if os.environ.get('FW_DEPS_DIR') else next((p.parent.parent for p in INP.rglob('fosp-deps/timm/__init__.py')), None)
 if deps is None:
     deps = TMP / 'fosp-deps'
-    subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '--target', str(deps), '--no-deps', 'setuptools==80.9.0', 'wheel',
-                    'addict', 'yapf==0.40.1', 'easydict', 'future', 'ninja', 'timm', 'gdown', 'platformdirs', 'tomli'], check=True)
-if not DRY:
+    if not NO_PIP:
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', '--target', str(deps), '--no-deps', 'setuptools==80.9.0', 'wheel',
+                        'addict', 'yapf==0.40.1', 'easydict', 'future', 'ninja', 'timm', 'gdown', 'platformdirs', 'tomli'], check=True)
+if not DRY and not NO_PIP:
     subprocess.run([sys.executable, '-m', 'pip', '-q', 'install', 'addict', 'yapf==0.40.1', 'easydict', 'timm==0.6.13', 'regex',
                     'setuptools<81', 'gdown'], check=True)
 sys.path[:0] = [str(repo), str(repo / 'inpainter_setting'), str(mmcv_dir), str(deps)]
@@ -86,38 +156,52 @@ for op in (bias_act, upfirdn2d, ba, uf):
 logging.getLogger('mmcv').setLevel(logging.WARNING)
 cfg = Config.fromfile(str(repo / 'config/fosp_config.py'))
 cfg.model.pretrained = None
-CKPT = next(INP.rglob('fosp_smoke5k_14000/best.pth'))
+CKPT = Path(os.environ['FW_CKPT']) if os.environ.get('FW_CKPT') else next(INP.rglob('fosp_smoke5k_14000/best.pth'))
 log('ENV', repo=str(repo), mmcv=str(mmcv_dir), deps=str(deps), ckpt=str(CKPT), gpu=torch.cuda.get_device_name(0),
     torch=torch.__version__, seconds=round(elapsed()))
 
 
-def build(use_temporal):
+def build(use_temporal, init=None):
     seg = build_segmentor(cfg.model).cuda()
     for op in (bias_act, upfirdn2d, ba, uf):
         op._init = lambda: False
     state = torch.load(CKPT, map_location='cpu', weights_only=True)
     seg.load_state_dict(state['state_dict'], strict=True)
     del state
-    return fwt.TemporalFoSp(seg, num_refs=1, use_temporal=use_temporal, init_bias=CFG['init_bias']).cuda()
+    model = fwt.TemporalFoSp(seg, num_refs=1, use_temporal=use_temporal, init_bias=CFG['init_bias'],
+                             fusion=CFG['fusion'] if use_temporal else 'convex').cuda()
+    if init:  # warm start from an earlier run of the same variant (*_best.pth written by train())
+        state = torch.load(init, map_location='cpu', weights_only=True)
+        assert bool(state.get('use_temporal')) == use_temporal, f'{init}: use_temporal mismatch'
+        model.load_state_dict(state['state_dict'], strict=True)
+        log('INIT', path=str(init), use_temporal=use_temporal, history=state.get('history'))
+        del state
+    return model
 
 
 # ------------------------------------------------------------------ data
-archive = TMP / 'SmokeSeg.zip'
-if not archive.is_file():
-    import gdown
-    gdown.download(id='1AIHZ5PckjHGqeaG3VY5WZgH-Y-5lAzA0', output=str(archive), quiet=True)
-data_root = TMP / 'SmokeSeg-data'
-if not data_root.is_dir():
-    with zipfile.ZipFile(archive) as z:
-        for n in z.namelist():
-            assert (data_root / n).resolve().is_relative_to(data_root.resolve())
-        z.extractall(data_root)
-SEG = next(p.parent for p in data_root.rglob('JPEGImages') if (p.parent / 'SegmentationClass').is_dir())
-MF = next(INP.rglob('fw_day2/manifest_day2.json'))
+if os.environ.get('FW_SEG_ROOT'):  # folder that holds JPEGImages/ and SegmentationClass/
+    SEG = Path(os.environ['FW_SEG_ROOT'])
+else:
+    archive = TMP / 'SmokeSeg.zip'
+    if not archive.is_file():
+        import gdown
+        gdown.download(id='1AIHZ5PckjHGqeaG3VY5WZgH-Y-5lAzA0', output=str(archive), quiet=True)
+    data_root = TMP / 'SmokeSeg-data'
+    if not data_root.is_dir():
+        with zipfile.ZipFile(archive) as z:
+            for n in z.namelist():
+                assert (data_root / n).resolve().is_relative_to(data_root.resolve())
+            z.extractall(data_root)
+    SEG = next(p.parent for p in data_root.rglob('JPEGImages') if (p.parent / 'SegmentationClass').is_dir())
+MF = Path(os.environ['FW_MANIFEST']) if os.environ.get('FW_MANIFEST') else next(INP.rglob('fw_day2/manifest_day2.json'))
 PREP = MF.parent
 manifest = json.loads(MF.read_text())
 train_rows, val_rows, test_rows = manifest['train'], manifest['val'], manifest['test']
 neg_rows = [n for n in manifest['negatives'] if n['split'] in ('val', 'test')]
+if os.environ.get('FW_LIMIT'):  # smoke test only: first N rows of every split
+    _n = int(os.environ['FW_LIMIT'])
+    train_rows, val_rows, test_rows, neg_rows = train_rows[:_n], val_rows[:_n], test_rows[:_n], neg_rows[:_n]
 for name, rows in (('train', train_rows), ('val', val_rows), ('test', test_rows)):
     log('DATA', split=name, images=len(rows), with_ref=sum(bool(r.get('ref')) for r in rows),
         events=len({r['event'] for r in rows}), day1_pairs=sum(bool(r.get('day1_pair')) for r in rows))
@@ -198,15 +282,15 @@ def worker_init(wid):
 
 
 def loader(ds, batch, shuffle):
-    return torch.utils.data.DataLoader(ds, batch_size=batch, shuffle=shuffle, num_workers=0 if DRY else 3, drop_last=shuffle,
-                                       pin_memory=not DRY, persistent_workers=shuffle and not DRY, worker_init_fn=worker_init)
+    return torch.utils.data.DataLoader(ds, batch_size=batch, shuffle=shuffle, num_workers=WORKERS, drop_last=shuffle,
+                                       pin_memory=not DRY, persistent_workers=shuffle and WORKERS > 0, worker_init_fn=worker_init)
 
 
 @torch.no_grad()
 def evaluate(model, rows, use_temporal, label, negatives=False, no_ref=False, swap_ref=None):
     model.eval()
     out = []
-    for x, xr, has, valid, y, idx in loader(SmokeSet(rows, negatives=negatives, swap_ref=swap_ref), 4, False):
+    for x, xr, has, valid, y, idx in loader(SmokeSet(rows, negatives=negatives, swap_ref=swap_ref), EVAL_BATCH, False):
         if no_ref:
             has = torch.zeros_like(has)
         logits, _, w = model(x.cuda(non_blocking=True), xr.cuda(non_blocking=True) if use_temporal else None, has.cuda())
@@ -252,21 +336,23 @@ def report(tag, rows, negatives=False):
 def param_groups(model, use_temporal):
     groups, params = [], []
     for name, p in model.named_parameters():
-        if not p.requires_grad or (name.startswith('arbitration') and not use_temporal):
+        new = name.startswith('arbitration') or name.startswith('obs_convs')
+        if not p.requires_grad or (new and not use_temporal):
             continue
-        mult = 10.0 if ('decode_head' in name or name.startswith('arbitration')) else 1.0
+        mult = 10.0 if ('decode_head' in name or new) else 1.0
         no_decay = 'norm' in name or 'pos_block' in name
         groups.append({'params': [p], 'lr': CFG['base_lr'] * mult, 'lr_multiplier': mult, 'weight_decay': 0.0 if no_decay else 0.01})
         params.append(p)
     return groups, params
 
 
-def train(name, use_temporal, updates=None, budget=None):
-    model = build(use_temporal)
+def train(name, use_temporal, updates=None, budget=None, init=None):
+    model = build(use_temporal, init)
     groups, params = param_groups(model, use_temporal)
     opt = torch.optim.AdamW(groups, lr=CFG['base_lr'], weight_decay=0.01)
     it = iter(loader(SmokeSet(train_rows, train=True, corrupt=use_temporal), CFG['micro_batch'], True))
     best, best_state, history, started = -1.0, None, [], time.time()
+    paused0, best_update = PAUSED[0], None
     target = updates or CFG['max_updates']
     evals = None
     u = 0
@@ -297,7 +383,8 @@ def train(name, use_temporal, updates=None, budget=None):
             tot += float(loss.detach()) / CFG['accumulate']
         torch.nn.utils.clip_grad_norm_(params, 1.0)
         opt.step()
-        spu = (time.time() - started) / u
+        GUARD.step(name, u)
+        spu = (time.time() - started - (PAUSED[0] - paused0)) / u
         if budget is not None and u == 20:
             target = int(min(CFG['max_updates'], max(200, budget / spu)))
             log('TARGET_UPDATES', run=name, sec_per_update=round(spu, 3), updates=target)
@@ -312,8 +399,11 @@ def train(name, use_temporal, updates=None, budget=None):
             history.append(dict(update=u, **summ))
             log('VAL', run=name, update=u, **summ)
             if summ['image_f1'] > best:
-                best = summ['image_f1']
+                best, best_update = summ['image_f1'], u
                 best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+                # Save at once, so a crash or a stopped laptop run keeps the best model so far.
+                torch.save({'state_dict': best_state, 'history': history, 'cfg': CFG, 'use_temporal': use_temporal,
+                            'best_update': u}, OUT / f'{name}_best.pth')
         if elapsed() > TOTAL_BUDGET - 12 * 60:
             log('STOP_EARLY', run=name, update=u, reason='total budget')
             break
@@ -322,33 +412,42 @@ def train(name, use_temporal, updates=None, budget=None):
         history.append(dict(update=u, **fwt.summarize(rows)))
         best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
     model.load_state_dict(best_state)
-    torch.save({'state_dict': best_state, 'history': history, 'cfg': CFG, 'use_temporal': use_temporal}, OUT / f'{name}_best.pth')
-    log('TRAIN_DONE', run=name, updates=u, best_val_image_f1=best, train_minutes=round((time.time() - started) / 60, 1))
+    torch.save({'state_dict': best_state, 'history': history, 'cfg': CFG, 'use_temporal': use_temporal,
+                'best_update': best_update or u}, OUT / f'{name}_best.pth')
+    log('TRAIN_DONE', run=name, updates=u, best_update=best_update or u, best_val_image_f1=best,
+        train_minutes=round((time.time() - started) / 60, 1), paused_minutes=round((PAUSED[0] - paused0) / 60, 1))
     return model, u
 
 
 results = {}
 try:
-    # E0: transfer baseline (no SmokeSeg training)
-    m0 = build(False)
-    results['E0'] = {s: evaluate(m0, rows, False, 'E0_' + s) for s, rows in (('val', val_rows), ('test', test_rows))}
-    results['E0']['neg'] = evaluate(m0, neg_rows, False, 'E0_neg', negatives=True)
-    for s in ('val', 'test'):
-        report('RESULT_E0_' + s, results['E0'][s])
-    report('RESULT_E0_neg', results['E0']['neg'], negatives=True)
-    del m0; torch.cuda.empty_cache()
+    log('RUN_CONFIG', runs=RUNS, fixed_updates=FIXED_UPDATES, init=INIT, workers=WORKERS, eval_batch=EVAL_BATCH, out=str(OUT), **CFG)
+    n_updates = FIXED_UPDATES
+    if 'E0' in RUNS:
+        # E0: transfer baseline (no SmokeSeg training)
+        m0 = build(False)
+        results['E0'] = {s: evaluate(m0, rows, False, 'E0_' + s) for s, rows in (('val', val_rows), ('test', test_rows))}
+        results['E0']['neg'] = evaluate(m0, neg_rows, False, 'E0_neg', negatives=True)
+        for s in ('val', 'test'):
+            report('RESULT_E0_' + s, results['E0'][s])
+        report('RESULT_E0_neg', results['E0']['neg'], negatives=True)
+        del m0; torch.cuda.empty_cache()
 
-    # E1: single-frame fine-tune (sets the update budget for both runs)
-    m1, n_updates = train('E1_single', False, budget=E1_TRAIN_BUDGET)
-    results['E1'] = {s: evaluate(m1, rows, False, 'E1_' + s) for s, rows in (('val', val_rows), ('test', test_rows))}
-    results['E1']['neg'] = evaluate(m1, neg_rows, False, 'E1_neg', negatives=True)
-    for s in ('val', 'test'):
-        report('RESULT_E1_' + s, results['E1'][s])
-    report('RESULT_E1_neg', results['E1']['neg'], negatives=True)
-    del m1; torch.cuda.empty_cache()
+    if 'E1' in RUNS:
+        # E1: single-frame fine-tune (sets the update budget for both runs unless FW_UPDATES is given)
+        m1, n_updates = train('E1_single', False, updates=FIXED_UPDATES, budget=None if FIXED_UPDATES else E1_TRAIN_BUDGET,
+                              init=INIT['E1'])
+        results['E1'] = {s: evaluate(m1, rows, False, 'E1_' + s) for s, rows in (('val', val_rows), ('test', test_rows))}
+        results['E1']['neg'] = evaluate(m1, neg_rows, False, 'E1_neg', negatives=True)
+        for s in ('val', 'test'):
+            report('RESULT_E1_' + s, results['E1'][s])
+        report('RESULT_E1_neg', results['E1']['neg'], negatives=True)
+        del m1; torch.cuda.empty_cache()
 
+    if 'E2' not in RUNS:
+        raise SystemExit(0)  # the finally-block still writes bootstrap lines, per_image.json and ALL_DONE
     # E2: same number of updates, observed background + arbitration
-    m2, _ = train('E2_temporal', True, updates=n_updates)
+    m2, _ = train('E2_temporal', True, updates=n_updates, init=INIT['E2'])
     results['E2'] = {s: evaluate(m2, rows, True, 'E2_' + s) for s, rows in (('val', val_rows), ('test', test_rows))}
     results['E2']['neg'] = evaluate(m2, neg_rows, True, 'E2_neg', negatives=True)
     for s in ('val', 'test'):

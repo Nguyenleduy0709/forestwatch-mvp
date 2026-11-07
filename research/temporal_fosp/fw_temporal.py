@@ -76,16 +76,32 @@ def image_cues(cur, ref, box=9, eps=1e-6):
 
 
 class TemporalFoSp(nn.Module):
-    def __init__(self, segmentor, num_refs=1, use_temporal=True, hidden=32, init_bias=4.0):
+    """fusion='convex' (Day-2 pilot): FoSp's foreground conv sees w0*F_inferred + w1*F_observed.
+    fusion='residual': FoSp's path is kept as is and the observed difference is *added* after FoSp's
+    foreground conv through a zero-initialised 1x1 conv, scaled by the reliability gate w1.  At
+    initialisation the model is exactly FoSp, yet the new conv receives gradients (in the convex
+    pilot, w1 fell to ~1e-6).  The gate w1 is still a softmax and can still saturate towards 0, so
+    check w_obs after training."""
+
+    def __init__(self, segmentor, num_refs=1, use_temporal=True, hidden=32, init_bias=4.0, fusion='convex'):
         super().__init__()
+        assert fusion in ('convex', 'residual'), fusion
         self.seg = segmentor
         self.head = segmentor.decode_head
         self.num_refs = num_refs
         self.use_temporal = use_temporal
+        self.fusion = fusion
         n_src = 1 + num_refs
         cue_ch = n_src + 1 + 2 * num_refs + 1   # |dF| magnitudes, focus map, image cues, has_ref
         self.arbitration = nn.ModuleList(
             [Arbitration(n_src, cue_ch, hidden, init_bias) for _ in range(len(self.head.in_channels))])
+        if fusion == 'residual':
+            self.obs_convs = nn.ModuleList()
+            for fc in self.head.foreground_channel_convs:
+                conv = nn.Conv2d(fc.conv.in_channels * num_refs, fc.conv.out_channels, 1)
+                nn.init.zeros_(conv.weight)
+                nn.init.zeros_(conv.bias)
+                self.obs_convs.append(conv)
         mean = torch.tensor(MEAN).view(1, 3, 1, 1)
         std = torch.tensor(STD).view(1, 3, 1, 1)
         self.register_buffer('mean', mean, persistent=False)
@@ -118,7 +134,7 @@ class TemporalFoSp(nn.Module):
             inpaint = self._mat(mat_img, focus_mask, z, label)
             origin = self._mat(mat_img, ones, z, label)
         fg = [(inpaint[i] - origin[i]).abs() * 10 for i in range(len(inpaint))]
-        weights = None
+        weights, obs_terms = None, None
         if self.use_temporal and refs is not None:
             if has_ref is None:
                 has_ref = torch.ones(bsz, device=x.device)
@@ -144,9 +160,17 @@ class TemporalFoSp(nn.Module):
                 onehot[:, 0] = 1
                 w = hr * w + (1 - hr) * onehot
                 weights.append(w)
-                fused.append(sum(w[:, k:k + 1] * cands[k] for k in range(len(cands))))
-            fg = fused
+                if self.fusion == 'convex':
+                    fused.append(sum(w[:, k:k + 1] * cands[k] for k in range(len(cands))))
+                else:
+                    fused.append(torch.cat([w[:, k:k + 1] * cands[k] for k in range(1, len(cands))], 1))
+            if self.fusion == 'convex':
+                fg = fused
+            else:
+                obs_terms = fused
         foreground = [head.foreground_channel_convs[i](fg[i]) for i in range(len(fg))]
+        if obs_terms is not None:
+            foreground = [foreground[i] + self.obs_convs[i](obs_terms[i]) for i in range(len(foreground))]
         # FoSp always re-registers the foreground scale to the backbone feature it is fused with
         # (its `shape[2:] != [512, 512]` test compares a tuple with a list, so it is always True).
         foreground = [F.interpolate(foreground[i], size=feats[n_in - 1 - i].shape[2:], mode=head.interpolate_mode,
