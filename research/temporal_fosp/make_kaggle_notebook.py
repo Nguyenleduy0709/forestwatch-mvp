@@ -19,6 +19,9 @@ Day-4 presets (after the Day-3 arms finish):
                                      report test / false alarms / SMOKE5K at that choice (about 1 GPU hour)
   --preset day4-dice-zoom            E0 + E1 trained with the per-image soft-F1 loss and zoomed crops, plus the sweep;
                                      add the winning arm's data settings, e.g. --env FW_S5K_TRAIN=1 --env FW_TRAIN_NEG=0.2
+  --preset day4-e2 / day4-e3 / day4-e4   one 6000-update run each, same data settings as the E1 they are compared with
+                                     (tools/compare_runs.py across notebooks): E2 observed background with the
+                                     two-sided gate and delta fusion; E3 reference as input channels; E4 |image - reference|
 """
 import argparse
 import json
@@ -44,6 +47,10 @@ PRESETS = {  # name: (title, description, FW_* settings, extra kernel outputs to
                    [f'{USER}/forestwatch-day3-s5k-b']),
     'day4-dice-zoom': ('ForestWatch Day4 Dice Zoom', 'E1 with per-image soft-F1 loss, zoomed crops and the sweep',
                        {'FW_DICE_WEIGHT': '1', 'FW_ZOOM_MIN': '256', 'FW_TTA_SWEEP': '1'}, []),
+    'day4-e2': ('ForestWatch Day4 E2', 'E2: observed background, two-sided gate, delta fusion',
+                {'FW_RUNS': 'E2', 'FW_FUSION': 'delta', 'FW_GATE_LOSS': 'bce', 'FW_INIT_BIAS': '0'}, []),
+    'day4-e3': ('ForestWatch Day4 E3 Concat', 'baseline E3: reference image as extra input channels', {'FW_RUNS': 'E3'}, []),
+    'day4-e4': ('ForestWatch Day4 E4 Diff', 'baseline E4: |image - reference| as extra input channels', {'FW_RUNS': 'E4'}, []),
 }
 
 LAUNCHER = r'''# __TITLE__ (__DESC__): smoke pass, then the full run.  Results: /kaggle/working/__TAG__/

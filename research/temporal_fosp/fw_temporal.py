@@ -85,11 +85,28 @@ class TemporalFoSp(nn.Module):
     fusion='delta': as 'residual', but the added term is w1*(F_observed - F_inferred).  Where the
     reference shows no change (F_observed ~ 0) the branch can cancel FoSp's hallucinated foreground,
     which 'residual' cannot (its input is then ~0); with obs_conv equal to FoSp's conv and no
-    activation, it would reduce to the convex mix.  Still exactly FoSp at initialisation."""
+    activation, it would reduce to the convex mix.  Still exactly FoSp at initialisation.
 
-    def __init__(self, segmentor, num_refs=1, use_temporal=True, hidden=32, init_bias=4.0, fusion='convex'):
+    input_fusion (baselines without arbitration, use_temporal=False): the reference enters the backbone as
+    extra input channels, 'concat' = the reference image itself (as BSUV-Net feeds background frames),
+    'diff' = |image - reference| (a frame-difference channel, as SmokeyNet's MOG2/difference inputs).
+    A zero-initialised conv with the stem's geometry adds them to the stem conv output, so the model
+    is exactly FoSp at initialisation and MAT still sees only the RGB image.  No history -> zeros."""
+
+    def __init__(self, segmentor, num_refs=1, use_temporal=True, hidden=32, init_bias=4.0, fusion='convex',
+                 input_fusion='none'):
         super().__init__()
         assert fusion in ('convex', 'residual', 'delta'), fusion
+        assert input_fusion in ('none', 'concat', 'diff'), input_fusion
+        assert input_fusion == 'none' or not use_temporal, 'input-level baselines replace the arbitration'
+        self.input_fusion = input_fusion
+        self._extra = None
+        if input_fusion != 'none':
+            stem = next(m for m in segmentor.backbone.modules() if isinstance(m, nn.Conv2d) and m.in_channels == 3)
+            self.extra_stem = nn.Conv2d(3 * num_refs, stem.out_channels, stem.kernel_size, stem.stride, stem.padding,
+                                        stem.dilation, bias=False)
+            nn.init.zeros_(self.extra_stem.weight)
+            stem.register_forward_hook(self._add_extra)
         self.seg = segmentor
         self.head = segmentor.decode_head
         self.num_refs = num_refs
@@ -122,11 +139,21 @@ class TemporalFoSp(nn.Module):
     def _mat(self, img, mask, z, label):
         return self.head.generate_images(self.head.G, img, mask, z, label, 'none')
 
+    def _add_extra(self, module, inputs, output):  # forward hook on the backbone stem conv
+        return output if self._extra is None else output + self.extra_stem(self._extra)
+
     def forward(self, x, refs=None, has_ref=None):
         """x: (B,3,512,512) normalised RGB; refs: (B,K,3,512,512) normalised RGB; has_ref: (B,) {0,1}."""
         head = self.head
         n_in = len(head.in_channels)
-        feats = head._transform_inputs(self.seg.extract_feat(x))
+        if self.input_fusion != 'none' and refs is not None:
+            hr = (torch.ones(x.shape[0], device=x.device) if has_ref is None else has_ref.float()).view(-1, 1, 1, 1)
+            r = refs[:, :self.num_refs].flatten(1, 2)
+            self._extra = hr * (r if self.input_fusion == 'concat' else (x.repeat(1, self.num_refs, 1, 1) - r).abs())
+        try:
+            feats = head._transform_inputs(self.seg.extract_feat(x))
+        finally:
+            self._extra = None
         focus_map, focus_logits, out_1_4, out_1_8, out_1_16, out_1_32 = head.BCG(feats)
         focus_mask = ((1 - focus_map) >= head.focus_threshold).float()
         bsz = x.shape[0]
