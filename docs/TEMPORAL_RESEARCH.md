@@ -118,7 +118,7 @@ Log và output gốc lưu trên máy, ngoài Git, ở `outputs/day2_gpu/`: `fore
 
 **Đang chạy (07/11/2026): train trên máy, RTX 5070 Laptop 8 GB, torch 2.7.1+cu128**
 
-Code và notebook của lượt này chưa commit, đang chờ review.
+Code của lượt này nằm trong `research/temporal_fosp/` (`fw_temporal.py`, `train_temporal.py`, `train_local.ipynb`), commit ngay sau `cfe1665`.
 - Chạy bằng notebook (papermill). Micro-batch 1 × tích lũy 6, tức cùng 6 ảnh mỗi update như pilot.
 - Bước chạy thử, với E2 kiểu convex: 1,31 s/update cho E1 và 1,53 s/update cho E2, VRAM đỉnh 6,03 GB.
 - E1 và E2 mỗi run 6000 update (khoảng 8,5 epoch), 8 lần kiểm tra val, checkpoint chọn theo val, test chỉ chấm một lần ở cuối.
