@@ -106,7 +106,7 @@ Kernel Kaggle `forestwatch-day2-temporal-fosp-gpu-pilot`, Tesla T4, torch 2.11.0
    - Dấu hiệu ủng hộ: pixel-F1 trên val của E2 ở update 347 tụt còn 0,5155 (E1 lúc đó 0,7032), rồi hồi lại 0,6885 ở update 694.
 4. **Theo quy tắc quyết định:** CI của Δ(E2 − E1) chứa 0, nên không train dài thiết kế convex.
 
-Log và output gốc lưu trên máy, ngoài Git, ở `outputs/day2_gpu/`: `forestwatch-day2-temporal-fosp-gpu-pilot.log`, `fw_day2_run/per_image.json`, và hai checkpoint `*_best.pth`.
+Log và output gốc lưu trên máy, ngoài Git, ở `outputs/day2_gpu/`: `forestwatch-day2-temporal-fosp-gpu-pilot.log` và `fw_day2_run/per_image.json`. Hai checkpoint pilot `*_best.pth` đã xoá khỏi máy ngày 07/11/2026 vì đã có model tốt hơn; chúng vẫn còn trong Output Kaggle `forestwatch-day2-temporal-fosp-gpu-pilot`.
 
 ## 4. Hạn chế và bước tiếp
 
