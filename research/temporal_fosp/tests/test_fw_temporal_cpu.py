@@ -140,6 +140,35 @@ for fusion in ('residual', 'delta'):
     assert d < 1e-4 and all(g > 0 for g in g_obs)
     seg.eval()
 
+# --- input-level baselines (E3 concat, E4 diff): exactly FoSp at init, gradients reach the extra stem conv,
+#     and a sample without history stays exactly FoSp even after the extra conv has changed
+for kind in ('concat', 'diff'):
+    seg.eval()
+    with torch.no_grad():
+        base_out, _, _ = wrapper(x)
+    tb = fwt.TemporalFoSp(seg, num_refs=1, use_temporal=False, input_fusion=kind).eval()
+    with torch.no_grad():
+        o, _, _ = tb(x, xr, torch.ones(1))
+    d = float((o - base_out).abs().max())
+    tb.train(); tb.head.G.eval()
+    for p in tb.parameters():
+        p.grad = None
+    o2, h2, _ = tb(x2, xr2, has)
+    fwt.fosp_loss(tb.head, o2, h2, y).backward()
+    g = float(tb.extra_stem.weight.grad.abs().sum())
+    with torch.no_grad():
+        tb.extra_stem.weight.normal_(0, 0.01)
+    seg.eval(); tb.eval()
+    with torch.no_grad():
+        base2, _, _ = wrapper(x)
+        o_noref, _, _ = tb(x, xr, torch.zeros(1))
+        o_ref, _, _ = tb(x, xr, torch.ones(1))
+    d0, d1 = float((o_noref - base2).abs().max()), float((o_ref - base2).abs().max())
+    print(f'check 3e {kind}: stem conv {tuple(tb.extra_stem.weight.shape)}, max|out - FoSp| at init = {d:.2e}, '
+          f'extra-stem grad L1 = {g:.2e}, no-history after update = {d0:.2e}, with history after update = {d1:.2e}')
+    assert d < 1e-4 and g > 0 and d0 < 1e-4 and d1 > 1e-6
+    seg.eval()
+
 # --- corruptions / cues / metrics
 rng = np.random.default_rng(0)
 cur = (np.random.rand(512, 512, 3) * 255).astype(np.uint8)

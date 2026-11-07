@@ -45,7 +45,7 @@ Tùy chọn hay dùng (`--env FW_KEY=VALUE`):
 
 | Biến | Ý nghĩa |
 | --- | --- |
-| `FW_RUNS` | `E0,E1`, `E1`, `E0,E1,E2`, ... |
+| `FW_RUNS` | `E0,E1`, `E1`, `E0,E1,E2`, ... Thêm `E3` (ảnh nền ghép làm kênh đầu vào, kiểu BSUV-Net) và `E4` (kênh hiệu \|ảnh − nền\|, kiểu SmokeyNet): hai baseline dùng cùng ảnh nền, cùng hỏng hóc và cùng số update như E2 nhưng không có bước phân xử |
 | `FW_UPDATES` | Số update cố định cho E1 và E2 (mặc định của notebook: 6000) |
 | `FW_S5K_TRAIN=1` / `FW_S5K_EVAL=1` | Thêm SMOKE5K vào train / chấm thêm test SMOKE5K ở độ phân giải gốc |
 | `FW_TRAIN_NEG=0.2` | 20% mẫu train thay bằng ảnh nền không khói (mask rỗng) |
@@ -61,7 +61,10 @@ Preset lượt 5, chạy sau khi lượt 4 xong:
 ```powershell
 .\.venv\Scripts\python.exe research\temporal_fosp\make_kaggle_notebook.py --preset day4-tta-a --out work\kaggle_push\day4_tta_a
 .\.venv\Scripts\python.exe research\temporal_fosp\make_kaggle_notebook.py --preset day4-dice-zoom --env FW_S5K_TRAIN=1 --out work\kaggle_push\day4_dice_zoom
+.\.venv\Scripts\python.exe research\temporal_fosp\make_kaggle_notebook.py --preset day4-e3 --env FW_S5K_TRAIN=1 --out work\kaggle_push\day4_e3
 ```
+
+`day4-e2`, `day4-e3`, `day4-e4` mỗi notebook một run 6000 update (khoảng 5,5 giờ T4). Đặt cùng cấu hình dữ liệu với E1 dùng để so, rồi so qua `tools/compare_runs.py` trên các `per_image.json`.
 
 ## Train tiếp từ model tốt nhất
 

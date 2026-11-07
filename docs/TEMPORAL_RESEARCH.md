@@ -214,6 +214,28 @@ Test image-F1 0,6921; còn thiếu 75,6 điểm-ảnh để lên 0,80.
 **Lượt 5 (code đã sẵn, chạy sau lượt 4)**
 - `day4-tta-a` / `day4-tta-b`: không train. Nạp E1 tốt nhất của từng nhánh, chọn cách chấm (`none`, `flip`, `zoom`, `zoom+flip`) và ngưỡng (0,25–0,5) **chỉ trên val**, rồi chấm test, khung âm, SMOKE5K đúng một lần ở lựa chọn đó. Nhắm vào các ảnh bỏ sót có xác suất sát ngưỡng.
 - `day4-dice-zoom`: E1 cùng 6000 update, thêm loss soft-F1 theo ảnh (`FW_DICE_WEIGHT=1`) và ô cắt phóng tới 2× quanh khói (`FW_ZOOM_MIN=256`), kèm phép dò ở trên. Cấu hình dữ liệu lấy theo nhánh thắng ở lượt 4. Lượt này đổi hai thứ cùng lúc, nên tác dụng riêng của từng thứ cần ablation sau.
+- `day4-e2`, `day4-e3`, `day4-e4`: phép thử chính của bài báo, cùng dữ liệu, cùng ảnh nền, cùng hỏng hóc tổng hợp và cùng 6000 update:
+  - **E2**: nền quan sát với cổng giám sát hai chiều và kiểu ghép `delta`.
+  - **E3**: ghép ảnh nền vào làm kênh đầu vào (kiểu BSUV-Net).
+  - **E4**: thêm kênh |ảnh − nền| (kiểu SmokeyNet).
+
+  E3 và E4 không có bước phân xử. Ở cả hai, một conv khởi tạo 0 cộng vào đầu ra của conv đầu tiên trong backbone, nên lúc khởi tạo model trùng FoSp, và khi không có lịch sử thì vẫn trùng FoSp. Muốn chứng minh bước phân xử cần thiết thì E2 phải hơn cả E3 lẫn E4, có CI.
+
+**Công trình liên quan (rà ngày 07/11/2026, chưa vét hết)**
+
+Từng thành phần đã có người làm:
+- [SmokeyNet / FIgLib](https://arxiv.org/html/2112.08598v3): dùng ảnh hiện tại và khung trước đó, phân loại ô ảnh. Kênh nền MOG2 tăng F1 1,94 điểm.
+- [BSUV-Net](https://arxiv.org/pdf/1907.11371) và [BSUV-Net 2.0](https://arxiv.org/abs/2101.09585v1): đưa nền "trống" và nền gần đây vào làm đầu vào, cho bài toán trừ nền tổng quát.
+- [SmokeCPC, WACV 2026](https://openaccess.thecvf.com/content/WACV2026/papers/Zhao_False_Alarm_Rectification_for_Early_Smoke_Segmentation_WACV_2026_paper.pdf): điểm tin cậy cấp ảnh, train thêm ảnh không khói, test trên khung FIgLib không khói. Vì vậy mẫu âm khi train **không phải đóng góp mới**.
+- [TP-UAST](https://arxiv.org/html/2508.14597v1): kết hợp optical flow với ước lượng độ bất định, cho bài toán phát hiện.
+- [Sinh khói trên nền camera cố định](https://arxiv.org/html/2511.16617v1): chỉ dùng để tăng dữ liệu.
+
+Chưa thấy bài nào làm đúng tổ hợp sau:
+- phân đoạn khói từng pixel, phân xử theo từng pixel và từng tầng giữa nền inpainting của FoSp và nền quan sát đã căn theo vùng cắt;
+- độ tin cậy học bằng hỏng hóc tổng hợp; quay về FoSp khi không có lịch sử;
+- đánh giá trên split không rò rỉ, có khung âm thật.
+
+Loss F1, lật ảnh và phóng to khi chấm là kỹ thuật phổ biến, không tính là đóng góp. Trước khi nộp bài, cần quét các bài trích dẫn FoSp và các bài năm 2026, và so với SmokeCPC trên cùng giao thức khung âm.
 
 **Sau lượt này**
 - Đánh giá K-fold nhóm theo trạm.
