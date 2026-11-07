@@ -10,6 +10,8 @@
 | [Frontend](../frontend/README.md) | Sửa templates, CSS, TypeScript và build JS |
 | [Làm việc nhóm](../CONTRIBUTING.md) | Cập nhật main, nhánh feature/fix, PR, review và conflict |
 | [Train và resume](../notebooks/README.md) | Làm việc với notebook/model, độc lập với chạy web |
+| [Nghiên cứu FoSp-Temporal](TEMPORAL_RESEARCH.md) | Mục tiêu, split chống rò rỉ, giao thức đánh giá và kết quả pilot; mã ở [research/temporal_fosp](../research/temporal_fosp/README.md) |
+| [Pilot Day 1](../research/day1/README.md) | Ghi chú lượt thử Day 1 (head dư, fine-tune), trước khi có nền quan sát đã căn |
 | [Biên bản tái cấu trúc](RESTRUCTURING.md) | Kiểm tra 12 test, HTTP demo, FoSp GPU và quyết định tổ chức repo |
 | [Kiểm chứng giao diện trước đây](VALIDATION.md) | Các lượt kiểm tra và ảnh chụp ở giai đoạn trước; số test phản ánh thời điểm ghi |
 | [Benchmark FoSp 14.000](fosp_smoke5k_14000.json) | Xem số liệu checkpoint và tập đánh giá đã ghi |

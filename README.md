@@ -20,11 +20,15 @@ D:\ForestWatch\
 │   ├── src/app.ts           TypeScript nguồn
 │   └── static/              CSS, ảnh và JS đã build
 ├── notebooks/               Notebook/script tiếp tục train FoSp
+├── research/                Thử nghiệm nghiên cứu, web chưa dùng
+│   ├── temporal_fosp/       FoSp-Temporal: chuẩn bị dữ liệu, train, đánh giá
+│   └── day1/                Ghi chú và notebook pilot Day 1 (đã xóa output)
 ├── scripts/                 Kiểm tra dự án và FoSp web thật
 ├── docs/                    Kiến trúc, phạm vi sản phẩm, kết quả xác minh
 │   ├── README.md            Mục lục tài liệu
 │   ├── ARCHITECTURE.md      Luồng xử lý và các thành phần
-│   └── PRODUCT.md           Chức năng, giới hạn và hướng phát triển
+│   ├── PRODUCT.md           Chức năng, giới hạn và hướng phát triển
+│   └── TEMPORAL_RESEARCH.md Nghiên cứu FoSp-Temporal: giao thức và kết quả
 ├── .github/                 CI, mẫu PR, mẫu báo lỗi
 ├── .env.example             Mẫu biến môi trường, không chứa secret
 ├── CONTRIBUTING.md          Quy trình nhánh, PR, review và conflict
