@@ -3,7 +3,9 @@
 E0  FoSp trained on SMOKE5K (14k updates), frozen          -> transfer baseline
 E1  E0 fine-tuned on SmokeSeg-train, single frame           -> strong single-frame baseline
 E2  E0 fine-tuned with the same budget + observed background + learned arbitration
-All three use the same code path, fixed MAT latent (z = 0), threshold 0.4, 512x512 masks.
+E3  baseline: same references, corruptions and budget, reference image as extra input channels (no arbitration)
+E4  baseline: as E3 with |image - reference| as the extra channels (frame difference)
+All runs use the same code path, fixed MAT latent (z = 0), threshold 0.4, 512x512 masks.
 Every result is printed as one JSON line (tag + payload) so it can be read from the log.
 """
 import collections
@@ -75,10 +77,13 @@ WORKERS =int(os.environ.get('FW_WORKERS', 0 if DRY else 3))   # use 0 on Windows
 EVAL_BATCH = int(os.environ.get('FW_EVAL_BATCH', 4))
 FIXED_UPDATES = int(os.environ.get('FW_UPDATES', 0)) or None    # same update count for E1 and E2, no E1 time budget
 RUNS = [r.strip() for r in os.environ.get('FW_RUNS', 'E0,E1,E2').split(',')]
-INIT = {'E1': os.environ.get('FW_INIT_E1'), 'E2': os.environ.get('FW_INIT_E2')}  # warm start from *_best.pth
+# E3 / E4: input-level baselines with the same references and budget as E2 but no arbitration:
+# E3 = reference image as extra input channels (BSUV-Net style), E4 = |image - reference| channels (frame difference).
+BASELINES = {'E3': 'concat', 'E4': 'diff'}
+INIT = {r: os.environ.get(f'FW_INIT_{r}') for r in ('E1', 'E2', 'E3', 'E4')}  # warm start from *_best.pth
 NO_PIP = os.environ.get('FW_NO_PIP') == '1'
-assert EVAL_ONLY or 'E1' in RUNS or FIXED_UPDATES or 'E2' not in RUNS, 'E2 without E1 needs FW_UPDATES'
-assert not EVAL_ONLY or all(INIT[r] for r in ('E1', 'E2') if r in RUNS), 'FW_EVAL_ONLY needs FW_INIT_E1/E2 for E1/E2'
+assert EVAL_ONLY or 'E1' in RUNS or FIXED_UPDATES or not {'E2', 'E3', 'E4'} & set(RUNS), 'E2/E3/E4 without E1 need FW_UPDATES'
+assert not EVAL_ONLY or all(INIT[r] for r in INIT if r in RUNS), 'FW_EVAL_ONLY needs FW_INIT_<run> for every run'
 # Laptop protection: pause (never kill) so E1 and E2 still get the same number of updates.
 THERMAL_MAX = float(os.environ.get('FW_THERMAL_MAX', 0))        # pause when GPU temp >= this twice in a row (~1 min); 0 = off
 THERMAL_RESUME = float(os.environ.get('FW_THERMAL_RESUME', 75))  # resume once the GPU has cooled to this
@@ -189,7 +194,7 @@ log('ENV', repo=str(repo), mmcv=str(mmcv_dir), deps=str(deps), ckpt=str(CKPT), g
     torch=torch.__version__, seconds=round(elapsed()))
 
 
-def build(use_temporal, init=None):
+def build(use_temporal, init=None, input_fusion='none'):
     seg = build_segmentor(cfg.model).cuda()
     for op in (bias_act, upfirdn2d, ba, uf):
         op._init = lambda: False
@@ -197,7 +202,7 @@ def build(use_temporal, init=None):
     seg.load_state_dict(state['state_dict'], strict=True)
     del state
     model = fwt.TemporalFoSp(seg, num_refs=1, use_temporal=use_temporal, init_bias=CFG['init_bias'],
-                             fusion=CFG['fusion'] if use_temporal else 'convex').cuda()
+                             fusion=CFG['fusion'] if use_temporal else 'convex', input_fusion=input_fusion).cuda()
     if init:  # warm start from an earlier run of the same variant (*_best.pth written by train())
         if not Path(init).is_file():  # a pattern under the inputs, e.g. 'day3_s5k_b/E1_single_best.pth'
             hits = sorted(q for q in INP.rglob(init) if q.is_file())
@@ -205,6 +210,7 @@ def build(use_temporal, init=None):
             init = hits[0]
         state = torch.load(init, map_location='cpu', weights_only=True)
         assert bool(state.get('use_temporal')) == use_temporal, f'{init}: use_temporal mismatch'
+        assert state.get('input_fusion', 'none') == input_fusion, f'{init}: input_fusion mismatch'
         model.load_state_dict(state['state_dict'], strict=True)
         log('INIT', path=str(init), use_temporal=use_temporal, history=state.get('history'))
         del state
@@ -566,8 +572,9 @@ def report(tag, rows, negatives=False):
 def param_groups(model, use_temporal):
     groups, params = [], []
     for name, p in model.named_parameters():
-        new = name.startswith('arbitration') or name.startswith('obs_convs')
-        if not p.requires_grad or (new and not use_temporal):
+        gate = name.startswith('arbitration') or name.startswith('obs_convs')
+        new = gate or name.startswith('extra_stem')
+        if not p.requires_grad or (gate and not use_temporal):
             continue
         mult = 10.0 if ('decode_head' in name or new) else 1.0
         no_decay = 'norm' in name or 'pos_block' in name
@@ -576,11 +583,12 @@ def param_groups(model, use_temporal):
     return groups, params
 
 
-def train(name, use_temporal, updates=None, budget=None, init=None):
-    model = build(use_temporal, init)
+def train(name, use_temporal, updates=None, budget=None, init=None, input_fusion='none'):
+    model = build(use_temporal, init, input_fusion)
+    feeds_ref = use_temporal or input_fusion != 'none'  # E2 and the E3/E4 baselines see the references
     groups, params = param_groups(model, use_temporal)
     opt = torch.optim.AdamW(groups, lr=CFG['base_lr'], weight_decay=0.01)
-    train_set = SmokeSet(train_rows + S5K_TRAIN, train=True, corrupt=use_temporal, neg_share=CFG['train_neg'])
+    train_set = SmokeSet(train_rows + S5K_TRAIN, train=True, corrupt=feeds_ref, neg_share=CFG['train_neg'])
     it = iter(loader(train_set, CFG['micro_batch'], True))
     best, best_state, history, started = -1.0, None, [], time.time()
     paused0, best_update = PAUSED[0], None
@@ -602,7 +610,7 @@ def train(name, use_temporal, updates=None, budget=None, init=None):
                 it = iter(loader(train_set, CFG['micro_batch'], True))
                 x, xr, has, valid, y, _ = next(it)
             x, xr, has, valid, y = (t.cuda(non_blocking=True) for t in (x, xr, has, valid, y))
-            out, hier, w = model(x, xr if use_temporal else None, has)
+            out, hier, w = model(x, xr if feeds_ref else None, has)
             loss = fwt.fosp_loss(model.head, out, hier, y)
             if CFG['dice_weight']:
                 loss = loss + CFG['dice_weight'] * fwt.soft_f1_loss(out, y)
@@ -629,13 +637,13 @@ def train(name, use_temporal, updates=None, budget=None, init=None):
                 sec_per_update=round(spu, 3),
                 peak_gb=round(torch.cuda.max_memory_allocated() / 2 ** 30, 2), elapsed_min=round(elapsed() / 60, 1))
         if evals and u in evals:
-            rows = evaluate(model, val_rows, use_temporal, name + '_val')
+            rows = evaluate(model, val_rows, feeds_ref, name + '_val')
             summ = fwt.summarize(rows)
             ws = [r['w_obs_smoke'] for r in rows if r.get('w_obs_smoke') is not None]
             if ws:  # gate on the observed background (finest scale); ~0 everywhere = branch switched off
                 summ.update(w_obs_smoke=float(np.mean(ws)), w_obs_bg=float(np.mean([r['w_obs_bg'] for r in rows if 'w_obs_bg' in r])))
             if val_neg_rows:  # monitoring only: the checkpoint is still chosen by val image-F1
-                nr = evaluate(model, val_neg_rows, use_temporal, name + '_valneg', negatives=True)
+                nr = evaluate(model, val_neg_rows, feeds_ref, name + '_valneg', negatives=True)
                 summ.update(val_fa_any=float(np.mean([x['fa_any'] for x in nr])), val_fa_200=float(np.mean([x['fa_200'] for x in nr])))
             history.append(dict(update=u, **summ))
             log('VAL', run=name, update=u, **summ)
@@ -643,17 +651,17 @@ def train(name, use_temporal, updates=None, budget=None, init=None):
                 best, best_update = summ['image_f1'], u
                 best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
                 # Save at once, so a crash or a stopped laptop run keeps the best model so far.
-                torch.save({'state_dict': best_state, 'history': history, 'cfg': CFG, 'use_temporal': use_temporal,
+                torch.save({'state_dict': best_state, 'history': history, 'cfg': CFG, 'use_temporal': use_temporal, 'input_fusion': input_fusion,
                             'best_update': u}, OUT / f'{name}_best.pth')
         if elapsed() > TOTAL_BUDGET - 12 * 60:
             log('STOP_EARLY', run=name, update=u, reason='total budget')
             break
     if best_state is None:
-        rows = evaluate(model, val_rows, use_temporal, name + '_val')
+        rows = evaluate(model, val_rows, feeds_ref, name + '_val')
         history.append(dict(update=u, **fwt.summarize(rows)))
         best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
     model.load_state_dict(best_state)
-    torch.save({'state_dict': best_state, 'history': history, 'cfg': CFG, 'use_temporal': use_temporal,
+    torch.save({'state_dict': best_state, 'history': history, 'cfg': CFG, 'use_temporal': use_temporal, 'input_fusion': input_fusion,
                 'best_update': best_update or u}, OUT / f'{name}_best.pth')
     log('TRAIN_DONE', run=name, updates=u, best_update=best_update or u, best_val_image_f1=best,
         train_minutes=round((time.time() - started) / 60, 1), paused_minutes=round((PAUSED[0] - paused0) / 60, 1))
@@ -697,6 +705,26 @@ try:
             results['E1_tta'] = tta_select('E1', m1, False)
         del m1; torch.cuda.empty_cache()
 
+    for run, kind in BASELINES.items():
+        if run not in RUNS:
+            continue
+        # same references, corruptions and update budget as E2, but the reference enters at the input
+        m = build(False, INIT[run], kind) if EVAL_ONLY else train(f'{run}_{kind}', False, updates=n_updates,
+                                                                   init=INIT[run], input_fusion=kind)[0]
+        results[run] = {s: evaluate(m, rows, True, f'{run}_{s}') for s, rows in (('val', val_rows), ('test', test_rows))}
+        results[run]['neg'] = evaluate(m, neg_rows, True, f'{run}_neg', negatives=True)
+        for s in ('val', 'test'):
+            report(f'RESULT_{run}_{s}', results[run][s])
+        report(f'RESULT_{run}_neg', results[run]['neg'], negatives=True)
+        results[f'{run}_noref'] = {'test': evaluate(m, test_rows, True, f'{run}_noref', no_ref=True)}
+        report(f'RESULT_{run}_noref_test', results[f'{run}_noref']['test'])
+        if S5K_TEST:
+            results[run]['s5k'] = evaluate_s5k(m, S5K_TEST, True, f'{run}_s5k')
+            report_s5k(f'RESULT_{run}_s5k', results[run]['s5k'])
+        if TTA_SWEEP:
+            results[f'{run}_tta'] = tta_select(run, m, True)
+        del m; torch.cuda.empty_cache()
+
     if 'E2' not in RUNS:
         raise SystemExit(0)  # the finally-block still writes bootstrap lines, per_image.json and ALL_DONE
     # E2: same number of updates, observed background + arbitration
@@ -725,7 +753,9 @@ try:
             report('RESULT_E2_wrongref_test', results['E2_wrongref']['test'])
 finally:
     for a, b in (('E0', 'E1'), ('E1', 'E2'), ('E0', 'E2'), ('E1', 'E2_noref'), ('E1', 'E2_wrongref'), ('E2_noref', 'E2'),
-                 ('E1', 'E1_tta'), ('E2', 'E2_tta'), ('E0', 'E1_tta')):
+                 ('E1', 'E1_tta'), ('E2', 'E2_tta'), ('E0', 'E1_tta'),
+                 ('E1', 'E3'), ('E1', 'E4'), ('E3', 'E2'), ('E4', 'E2'), ('E3_noref', 'E3'), ('E4_noref', 'E4'),
+                 ('E3', 'E3_tta'), ('E4', 'E4_tta')):
         if a in results and b in results:
             for s in ('val', 'test', 's5k'):
                 if s not in results[a] or s not in results[b]:
