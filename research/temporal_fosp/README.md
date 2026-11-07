@@ -51,6 +51,17 @@ Tùy chọn hay dùng (`--env FW_KEY=VALUE`):
 | `FW_TRAIN_NEG=0.2` | 20% mẫu train thay bằng ảnh nền không khói (mask rỗng) |
 | `FW_FUSION`, `FW_GATE_LOSS` | Kiểu ghép của E2 (`convex`, `residual`, `delta`) và loss của cổng (`one_sided`, `bce`) |
 | `FW_INIT_E1`, `FW_INIT_E2` | Khởi tạo từ checkpoint `*_best.pth`: đường dẫn, hoặc mẫu tìm trong `/kaggle/input` như `day3_s5k_b/E1_single_best.pth` |
+| `FW_DICE_WEIGHT=1` | Thêm loss soft-F1 tính theo từng ảnh vào loss của FoSp, để khói nhỏ có trọng lượng ngang khói to |
+| `FW_ZOOM_MIN=256` | Ô cắt ngẫu nhiên khi train nhỏ tới 256 px (phóng tới 2×), một nửa số ô đặt quanh một pixel khói. Mặc định 410, giống các lượt trước |
+| `FW_TTA_SWEEP=1` | Sau khi train, chấm val ở mọi cặp (cách chấm, ngưỡng). Cách chấm gồm `none`, `flip`, `zoom` (4 ô 320 px phóng lên 512), `zoom+flip`; ngưỡng lấy từ `FW_TTA_THRESHOLDS`. Giữ cặp tốt nhất trên val rồi chấm test, khung âm, SMOKE5K ở cặp đó, ghi thành run `E1_tta` |
+| `FW_EVAL_ONLY=1` | Không train: nạp `FW_INIT_E1`/`FW_INIT_E2`, chấm lại và dò như `FW_TTA_SWEEP` |
+
+Preset lượt 5, chạy sau khi lượt 4 xong:
+
+```powershell
+.\.venv\Scripts\python.exe research\temporal_fosp\make_kaggle_notebook.py --preset day4-tta-a --out work\kaggle_push\day4_tta_a
+.\.venv\Scripts\python.exe research\temporal_fosp\make_kaggle_notebook.py --preset day4-dice-zoom --env FW_S5K_TRAIN=1 --out work\kaggle_push\day4_dice_zoom
+```
 
 ## Train tiếp từ model tốt nhất
 

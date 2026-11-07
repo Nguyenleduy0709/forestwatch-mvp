@@ -206,6 +206,23 @@ def fosp_loss(head, out, hier, y):
     return loss
 
 
+def soft_f1_loss(logits, y, eps=1.0):
+    """1 - soft F1 of each image, averaged over the batch (the metric averages F1 over images, whereas the
+    pixel BCE of fosp_loss is dominated by large plumes).
+
+    logits: (B,1,h,w) final logits; y: (B,1,H,W) long, 1 = smoke, 255 = ignore.  An image without smoke
+    (a training negative) gives fp / (fp + eps), which pushes its predicted area towards zero.
+    """
+    p = torch.sigmoid(F.interpolate(logits.float(), size=y.shape[-2:], mode='bilinear', align_corners=False))[:, 0]
+    keep = (y[:, 0] != 255).float()
+    t = (y[:, 0] == 1).float() * keep
+    p = p * keep
+    tp = (p * t).sum((1, 2))
+    fp = (p * (1 - t)).sum((1, 2))
+    fn = ((1 - p) * t).sum((1, 2))
+    return (1 - (2 * tp + eps) / (2 * tp + fp + fn + eps)).mean()
+
+
 def reliability_loss(weights, valid, has_ref):
     """Mean weight put on observed sources at pixels known to be invalid.
 

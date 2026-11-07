@@ -13,6 +13,12 @@ Continue from a saved model (weights only: the optimizer and the LR schedule sta
       --source nguynlduyb24dckh043/forestwatch-day3-s5k-b \
       --env FW_RUNS=E1 --env FW_S5K_TRAIN=1 --env FW_INIT_E1=day3_s5k_b/E1_single_best.pth --out work/kaggle_push/day4
 FW_INIT_E1 / FW_INIT_E2 may be a path or a pattern searched under /kaggle/input.
+
+Day-4 presets (after the Day-3 arms finish):
+  --preset day4-tta-a / day4-tta-b   no training: load the arm's best E1, choose (test-time mode, threshold) on val,
+                                     report test / false alarms / SMOKE5K at that choice (about 1 GPU hour)
+  --preset day4-dice-zoom            E0 + E1 trained with the per-image soft-F1 loss and zoomed crops, plus the sweep;
+                                     add the winning arm's data settings, e.g. --env FW_S5K_TRAIN=1 --env FW_TRAIN_NEG=0.2
 """
 import argparse
 import json
@@ -27,9 +33,17 @@ USER = 'nguynlduyb24dckh043'
 # FoSp-official + mmcv + deps (+ SMOKE5K), FoSp 14k checkpoint + SMOKE5K, and the Day-2 split/references.
 SOURCES = [f'{USER}/forestwatch-fosp-smoke5k', f'{USER}/notebook32e4daa033', f'{USER}/forestwatch-day2-temporal-prep']
 BASE = dict(FW_RUNS='E0,E1', FW_S5K_EVAL='1', FW_N_VAL_EVALS='8', FW_UPDATES='6000', FW_TOTAL_BUDGET='39600')
-PRESETS = {
-    'day3-s5k-a': ('ForestWatch Day3 S5K A', 'SmokeSeg only', {}),
-    'day3-s5k-b': ('ForestWatch Day3 S5K B', 'SmokeSeg + SMOKE5K', {'FW_S5K_TRAIN': '1'}),
+PRESETS = {  # name: (title, description, FW_* settings, extra kernel outputs to attach)
+    'day3-s5k-a': ('ForestWatch Day3 S5K A', 'SmokeSeg only', {}, []),
+    'day3-s5k-b': ('ForestWatch Day3 S5K B', 'SmokeSeg + SMOKE5K', {'FW_S5K_TRAIN': '1'}, []),
+    'day4-tta-a': ('ForestWatch Day4 TTA A', 'eval only: val-chosen test-time mode and threshold for arm A',
+                   {'FW_RUNS': 'E1', 'FW_EVAL_ONLY': '1', 'FW_INIT_E1': 'day3_s5k_a/E1_single_best.pth'},
+                   [f'{USER}/forestwatch-day3-s5k-a']),
+    'day4-tta-b': ('ForestWatch Day4 TTA B', 'eval only: val-chosen test-time mode and threshold for arm B',
+                   {'FW_RUNS': 'E1', 'FW_EVAL_ONLY': '1', 'FW_INIT_E1': 'day3_s5k_b/E1_single_best.pth'},
+                   [f'{USER}/forestwatch-day3-s5k-b']),
+    'day4-dice-zoom': ('ForestWatch Day4 Dice Zoom', 'E1 with per-image soft-F1 loss, zoomed crops and the sweep',
+                       {'FW_DICE_WEIGHT': '1', 'FW_ZOOM_MIN': '256', 'FW_TTA_SWEEP': '1'}, []),
 }
 
 LAUNCHER = r'''# __TITLE__ (__DESC__): smoke pass, then the full run.  Results: /kaggle/working/__TAG__/
@@ -78,7 +92,7 @@ def main():
     ap.add_argument('--no-smoke', action='store_true', help='skip the 20-update smoke pass')
     ap.add_argument('--out', required=True, help='folder to write kernel-metadata.json and the notebook into')
     a = ap.parse_args()
-    title, desc, env = PRESETS[a.preset] if a.preset else (a.title, 'custom run', {})
+    title, desc, env, extra_sources = PRESETS[a.preset] if a.preset else (a.title, 'custom run', {}, [])
     title = a.title or title
     if not title:
         ap.error('give --preset or --title')
@@ -104,7 +118,7 @@ def main():
     (out / f'{slug}.ipynb').write_text(json.dumps(nb, ensure_ascii=False, indent=1), encoding='utf-8')
     meta = dict(id=f'{USER}/{slug}', title=title, code_file=f'{slug}.ipynb', language='python', kernel_type='notebook',
                 is_private=True, enable_gpu=True, enable_tpu=False, enable_internet=True, keywords=[],
-                dataset_sources=a.dataset, kernel_sources=SOURCES + a.source, competition_sources=[], model_sources=[],
+                dataset_sources=a.dataset, kernel_sources=SOURCES + extra_sources + a.source, competition_sources=[], model_sources=[],
                 machine_shape='NvidiaTeslaT4')
     (out / 'kernel-metadata.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
     print(f'built {out} ({slug}); env {env}')
