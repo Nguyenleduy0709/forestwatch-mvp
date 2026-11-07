@@ -234,6 +234,56 @@ Ngoài ra B báo nhầm ít hơn A: ≥ 200 px là 2,3% so với 8,0%, bằng Fo
 - `forestwatch-day4-final`: E0 + E1 với loss soft-F1, ô cắt phóng tới 2×, 20% mẫu âm, phép dò cách chấm và ngưỡng trên val, `FW_EXAMPLES=24`. So với B, lượt này đổi ba thứ cùng lúc.
 - `forestwatch-day4-e2`: E2 (`delta`, cổng `bce`, `init_bias` 0), cùng 6000 update, kèm phép dò và hai phép tách nguồn lợi ích (no-ref, wrong-ref). Đối chứng là E1 của B: cùng dữ liệu, cùng ngân sách, cùng seed.
 
+**Kết quả Final (xong 22:07, 07/11/2026; 323 phút, best ở update 2250):**
+
+| Run | Val | Test image-F1 | IoU | 0–10 phút | Khói nhỏ | Báo nhầm ≥ 1 / 50 / 200 px | SMOKE5K | Camera SMOKE5K |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| E0 | 0,3501 | 0,5649 | 0,4523 | 0,3024 | 0,4713 | 13,8 / 9,2 / 2,3% | 0,7694 | 0,5076 |
+| B (lượt 4) | 0,4966 | 0,6572 | 0,5404 | 0,4137 | 0,5800 | 19,5 / 8,0 / 2,3% | 0,7688 | 0,5714 |
+| Final, ngưỡng 0,4 | 0,4952 | 0,6523 | 0,5403 | 0,4318 | 0,5655 | 11,5 / 9,8 / 7,5% | 0,7819 | 0,5433 |
+| Final + `zoom` @ 0,25 (chọn trên val) | 0,5312 | 0,6818 | 0,5682 | 0,5123 | 0,6013 | 18,4 / 16,7 / 10,9% | 0,7820 | 0,5715 |
+
+Bootstrap theo ngày (`compare_runs.py` cho cặp khác notebook):
+
+| Cặp | Test image-F1 | Báo nhầm ≥ 200 px (điểm %) | SMOKE5K |
+| --- | --- | --- | --- |
+| Final − B | −0,0049 [−0,0980; +0,0301] | +5,2 [−1,8; +15,8] | +0,0131 [+0,0003; +0,0263] |
+| Final `zoom` − Final | +0,0296 [+0,0152; +0,0552] | +3,4 [0; +7,7] | +0,0001 [−0,0102; +0,0119] |
+| Final `zoom` − E0 | +0,1169 [+0,0758; +0,1806] | +8,6 [−1,1; +17,6] | +0,0126 [−0,0056; +0,0308] |
+| Final `zoom` − B | +0,0246 [−0,0620; +0,0605] | +8,6 [0; +17,9] | +0,0132 [−0,0019; +0,0291] |
+
+- Ba thay đổi khi train (loss soft-F1, ô phóng to, 20% mẫu âm) không nâng test so với B ở cùng cách chấm, và val thấp hơn B 0,0014. Theo quy tắc chọn bằng val, **B vẫn là model train được chọn**.
+- Phóng to khi chấm (4 ô 320 px) với ngưỡng 0,25 cộng +0,030 cho cùng model, nhiều nhất ở 10 phút đầu (0,4318 → 0,5123). Đổi lại báo nhầm ≥ 200 px tăng từ 7,5% lên 10,9%. Val 0,5312 lạc quan vì được chọn trong 24 cặp trên chính val. B chưa được dò như vậy (`day4-tta-b` chưa chạy).
+- So với B, báo nhầm ≥ 1 px của Final giảm (19,5% → 11,5%) nhưng ≥ 200 px tăng (2,3% → 7,5%). Lượt này đổi ba thứ cùng lúc nên chưa biết do thứ nào.
+- Checkpoint Final nằm trong Output Kaggle `forestwatch-day4-final` (`day4_final/E1_single_best.pth`), chưa tải. Log, `per_image.json` và 48 ảnh ví dụ nằm ở `checkpoints/temporal_fosp_2026-11-07/kaggle_day4/final/`.
+- `forestwatch-day4-e3-concat` được đẩy lúc 22:08 vào chỗ GPU của Final: E3 với cùng cấu hình dữ liệu và cùng phép dò như E2.
+
+**Kết quả E2 (xong khoảng 22:45, 07/11/2026; train 326 phút, best ở update 6000, tức val còn tăng khi hết ngân sách):**
+
+| Run | Val | Test image-F1 | IoU | 0–10 phút | Khói nhỏ | Báo nhầm ≥ 1 / 50 / 200 px | SMOKE5K | Camera SMOKE5K |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| B (lượt 4) | 0,4966 | 0,6572 | 0,5404 | 0,4137 | 0,5800 | 19,5 / 8,0 / 2,3% | 0,7688 | 0,5714 |
+| E2, ngưỡng 0,4 | 0,4660 | 0,6598 | 0,5423 | 0,4321 | 0,5842 | 23,6 / 18,4 / 9,8% | 0,7802 | 0,5502 |
+| E2 + `zoom` @ 0,3 (chọn trên val) | 0,5033 | 0,6974 | 0,5814 | 0,4978 | 0,6349 | 30,5 / 23,6 / 16,1% | 0,8000 | 0,5953 |
+| E2 bỏ ảnh nền (no-ref) | | 0,6616 | 0,5483 | 0,4433 | 0,5871 | | | |
+| E2 với nền của camera khác (wrong-ref) | | 0,6633 | 0,5465 | 0,4476 | 0,5868 | | | |
+
+Cổng mở: w_obs trung bình trên test là 0,77 ở vùng khói và 0,86 ở nền (val: 0,76 / 0,81), không tắt như lượt 1 và 2.
+
+| Cặp (bootstrap theo ngày) | Test image-F1 | Báo nhầm ≥ 200 px (điểm %) | SMOKE5K |
+| --- | --- | --- | --- |
+| E2 − B | +0,0026 [−0,0466; +0,0208] | +7,5 [+0,8; +15,3] | +0,0113 [+0,0033; +0,0194] |
+| E2 − E2 no-ref (cùng model) | −0,0018 [−0,0121; +0,0174] | | |
+| E2 `zoom` − E2 | +0,0376 [+0,0250; +0,0670] | +6,3 [+0,7; +14,5] | +0,0198 [+0,0114; +0,0293] |
+| E2 `zoom` − B (B không phóng to) | +0,0402 [+0,0182; +0,0505] | +13,8 [+5,3; +23,5] | +0,0311 [+0,0192; +0,0440] |
+| E2 `zoom` − Final `zoom` | +0,0156 [−0,0189; +0,0825] | +5,2 [−5,7; +18,3] | +0,0180 [+0,0053; +0,0295] |
+| E2 − E0 | +0,0949 [+0,0561; +0,1704] | +7,5 [+1,8; +14,6] | |
+
+- **Nền quan sát vẫn chưa giúp.** Lần này cổng mở, nhưng bỏ ảnh nền hay thay bằng nền của camera khác cho cùng kết quả (0,6616 và 0,6633 so với 0,6598). Nhánh nền được ghép vào mà không làm đổi dự đoán.
+- **E2 không hơn B:** test +0,003 với CI chứa 0, val thấp hơn (0,4660 so với 0,4966), báo nhầm ≥ 200 px nhiều hơn (9,8% so với 2,3%). Theo quy tắc chọn bằng val, B vẫn là model được chọn. Giả thuyết chính chưa được ủng hộ ở lần thử thứ ba.
+- **E2 + phóng to khi chấm** có test cao nhất từ trước tới nay (0,6974), nhưng phần tăng đến từ phóng to và ngưỡng 0,3, không từ ảnh nền (E2 ≈ E2 no-ref). Báo nhầm ≥ 200 px lên 16,1%. So với B là so khác cách chấm, vì B chưa được dò phóng to.
+- Checkpoint E2 nằm trong Output Kaggle `forestwatch-day4-e2`, chưa tải. Log, `per_image.json` và 24 ảnh ví dụ ở `checkpoints/temporal_fosp_2026-11-07/kaggle_day4/e2/`.
+
 **Phần còn thiếu để lên image-F1 0,80 (điểm từng ảnh của E1 lượt 2, test 701 ảnh)**
 
 Test image-F1 0,6921; còn thiếu 75,6 điểm-ảnh để lên 0,80.
