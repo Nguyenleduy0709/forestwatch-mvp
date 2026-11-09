@@ -9,6 +9,7 @@ class Analysis(models.Model):
     original = models.ImageField(upload_to='originals/%Y/%m/')
     annotated = models.ImageField(upload_to='results/%Y/%m/', blank=True)
     mode = models.CharField(max_length=12)
+    model_name = models.CharField(max_length=128, blank=True, default='')
     detections = models.JSONField(default=list)
     elapsed_ms = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -38,3 +39,26 @@ class AlertHistory(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     class Meta:
         ordering = ['created_at']
+
+
+class SmokeEvent(models.Model):
+    alert = models.OneToOneField(Alert, on_delete=models.CASCADE, related_name='smoke_event')
+    source_key = models.UUIDField()
+    source_kind = models.CharField(max_length=6)
+    first_position = models.FloatField(null=True)
+    last_seen = models.DateTimeField()
+    positive_samples = models.PositiveIntegerField(default=1)
+    clear_samples = models.PositiveSmallIntegerField(default=0)
+    closed = models.BooleanField(default=False)
+    peak_score = models.FloatField(default=0)
+    peak_position = models.FloatField(null=True)
+    peak_at = models.DateTimeField(null=True)
+    peak_original = models.ImageField(upload_to='events/peak-original/%Y/%m/', blank=True)
+    peak_annotated = models.ImageField(upload_to='events/peak-annotated/%Y/%m/', blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['source_key'], condition=models.Q(closed=False), name='monitor_one_open_smoke_event',
+            ),
+        ]
