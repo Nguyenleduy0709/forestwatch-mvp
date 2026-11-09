@@ -4,9 +4,13 @@ from django.urls import path
 from monitor import views
 
 urlpatterns = [
-    path('', views.home, name='home'), path('admin/', admin.site.urls),
+    path('', views.home, name='home'),
+    path('admin/', admin.site.urls),
+    path('register/', views.register, name='register'),
     path('login/', auth.LoginView.as_view(template_name='registration/login.html'), name='login'),
-    path('logout/', auth.LogoutView.as_view(), name='logout'),
+    path('logout/', views.logout_view, name='logout'),
+    path('auth/google/login/', views.google_login, name='google_login'),
+    path('auth/google/callback/', views.google_callback, name='google_callback'),
     path('dashboard/', views.dashboard, name='dashboard'),
     path('analyze/', views.analyze, name='analyze'),
     path('runs/<uuid:pk>/', views.detail, name='detail'),

@@ -148,3 +148,115 @@ class WorkflowTests(TestCase):
         self.assertRedirects(response, reverse('dashboard'))
         self.assertEqual(Analysis.objects.count(), 0)
         self.assertEqual(Alert.objects.count(), 0)
+
+    def test_registration_success_and_login(self):
+        self.client.logout()
+        res = self.client.get(reverse('register'))
+        self.assertEqual(res.status_code, 200)
+        post_res = self.client.post(reverse('register'), {
+            'username': 'ranger_nam',
+            'email': 'nam@forestwatch.vn',
+            'password': 'safe-password-999',
+            'password_confirm': 'safe-password-999',
+        })
+        self.assertRedirects(post_res, reverse('dashboard'))
+        user = get_user_model().objects.get(username='ranger_nam')
+        self.assertEqual(user.email, 'nam@forestwatch.vn')
+        # Check authenticated session
+        self.assertEqual(int(self.client.session['_auth_user_id']), user.pk)
+
+    def test_registration_validation_errors(self):
+        self.client.logout()
+        # Mismatched passwords
+        res1 = self.client.post(reverse('register'), {
+            'username': 'ranger_err',
+            'email': 'err@forestwatch.vn',
+            'password': 'safe-password-1',
+            'password_confirm': 'different-pass-2',
+        })
+        self.assertEqual(res1.status_code, 200)
+        self.assertFalse(get_user_model().objects.filter(username='ranger_err').exists())
+
+        # Duplicate username
+        res2 = self.client.post(reverse('register'), {
+            'username': 'operator',
+            'email': 'unique@forestwatch.vn',
+            'password': 'safe-password-1',
+            'password_confirm': 'safe-password-1',
+        })
+        self.assertEqual(res2.status_code, 200)
+        self.assertContains(res2, 'Tên đăng nhập này đã được sử dụng')
+
+    def test_google_login_unconfigured_flow(self):
+        self.client.logout()
+        with override_settings(GOOGLE_CLIENT_ID='', GOOGLE_CLIENT_SECRET=''):
+            res = self.client.get(reverse('google_login'))
+            self.assertRedirects(res, reverse('login'))
+
+    def test_google_login_redirect_when_configured(self):
+        self.client.logout()
+        with override_settings(
+            GOOGLE_CLIENT_ID='test-client-id.apps.googleusercontent.com',
+            GOOGLE_CLIENT_SECRET='test-secret-key',
+        ):
+            res = self.client.get(reverse('google_login'))
+            self.assertEqual(res.status_code, 302)
+            self.assertTrue(res.url.startswith('https://accounts.google.com/o/oauth2/v2/auth'))
+            self.assertIn('client_id=test-client-id.apps.googleusercontent.com', res.url)
+            self.assertIn('state=', res.url)
+            self.assertTrue(self.client.session.get('google_oauth_state'))
+
+    def test_google_callback_success_new_and_existing_user(self):
+        self.client.logout()
+        # 1. New user through Google OAuth
+        session = self.client.session
+        session['google_oauth_state'] = 'valid-test-state'
+        session.save()
+
+        mock_tokens = {'access_token': 'fake-access-token-123'}
+        mock_userinfo = {
+            'sub': 'google-uid-1001',
+            'email': 'newranger@gmail.com',
+            'given_name': 'Lam',
+            'family_name': 'Nguyen',
+        }
+
+        with patch('monitor.auth_views.exchange_code_for_tokens', return_value=mock_tokens), \
+             patch('monitor.auth_views.fetch_google_user_info', return_value=mock_userinfo):
+            res = self.client.get(reverse('google_callback') + '?code=auth-code-xyz&state=valid-test-state')
+            self.assertRedirects(res, reverse('dashboard'))
+            new_user = get_user_model().objects.get(email='newranger@gmail.com')
+            self.assertEqual(new_user.first_name, 'Lam')
+            self.assertEqual(new_user.last_name, 'Nguyen')
+            self.assertEqual(int(self.client.session['_auth_user_id']), new_user.pk)
+
+        # 2. Existing user logging in via Google OAuth
+        self.client.logout()
+        session = self.client.session
+        session['google_oauth_state'] = 'second-test-state'
+        session.save()
+
+        with patch('monitor.auth_views.exchange_code_for_tokens', return_value=mock_tokens), \
+             patch('monitor.auth_views.fetch_google_user_info', return_value=mock_userinfo):
+            res2 = self.client.get(reverse('google_callback') + '?code=auth-code-xyz&state=second-test-state')
+            self.assertRedirects(res2, reverse('dashboard'))
+            self.assertEqual(int(self.client.session['_auth_user_id']), new_user.pk)
+
+    def test_google_callback_invalid_state_and_error(self):
+        self.client.logout()
+        # State mismatch
+        session = self.client.session
+        session['google_oauth_state'] = 'correct-state'
+        session.save()
+        res = self.client.get(reverse('google_callback') + '?code=code123&state=wrong-state')
+        self.assertRedirects(res, reverse('login'))
+
+        # Error returned by Google
+        res2 = self.client.get(reverse('google_callback') + '?error=access_denied')
+        self.assertRedirects(res2, reverse('login'))
+
+    def test_logout_view(self):
+        self.client.force_login(self.user)
+        res = self.client.post(reverse('logout'))
+        self.assertRedirects(res, reverse('home'))
+        self.assertNotIn('_auth_user_id', self.client.session)
