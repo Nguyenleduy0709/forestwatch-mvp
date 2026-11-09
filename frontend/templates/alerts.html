@@ -1,1 +1,163 @@
-{% extends 'base.html' %}{% block title %}Lịch sử cảnh báo — ForestWatch{% endblock %}{% block content %}<main class="workspace"><div class="page-heading"><div><span class="eyebrow">NHẬT KÝ GIÁM SÁT</span><h1>Mỗi sự kiện, một dấu vết.</h1><p>Tối đa 100 cảnh báo mới nhất của bạn · Kết quả mô phỏng được ghi nhãn riêng.</p></div><a class="button" href="{% url 'dashboard' %}">Phân tích ảnh mới ↗</a></div><section class="panel"><form method="get" class="filter"><label for="status-filter">Trạng thái</label><select name="status" id="status-filter"><option value="">Tất cả</option>{% for value,label in statuses %}<option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select><button class="button small secondary">Lọc</button></form><div class="table-scroll"><table><thead><tr><th>Nguồn ảnh</th><th>Thời điểm</th><th>Chế độ</th><th>Trạng thái</th><th></th></tr></thead><tbody>{% for alert in alerts %}<tr><td><strong>{{ alert.analysis.source }}</strong></td><td>{{ alert.created_at|date:'d/m/Y H:i' }}</td><td>{% if alert.analysis.mode == 'demo' %}<span class="pill warning">Mô phỏng</span>{% elif alert.analysis.mode == "fosp" %}<span class="pill">FoSp</span>{% else %}<span class="pill">YOLO</span>{% endif %}</td><td>{{ alert.get_status_display }}</td><td><a href="{% url 'detail' alert.analysis_id %}">Xem chi tiết ↗</a></td></tr>{% empty %}<tr><td colspan="5" class="empty-cell">Chưa có cảnh báo phù hợp. Hãy thử phân tích một ảnh.</td></tr>{% endfor %}</tbody></table></div></section></main>{% endblock %}
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Cảnh báo khói — ForestWatch{% endblock %}
+{% block body_class %}cctv-page cctv-evidence-page{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'css/control-room.css' %}">{% endblock %}
+{% block content %}
+<main class="cctv-control-center cctv-review">
+  <header class="cctv-heading">
+    <div>
+      <div class="cctv-kicker">FORESTWATCH / NHẬT KÝ</div>
+      <h1>Cảnh báo khói</h1>
+      <p>Đối chiếu bằng chứng và cập nhật kết quả xác minh.</p>
+    </div>
+    <a class="cctv-btn" href="{% url 'control_room' %}">← Phòng giám sát</a>
+  </header>
+  <div class="cctv-review-tools">
+    <div>
+      <strong>{{ pending_count }} cảnh báo chờ xác minh</strong>
+      <span style="color: var(--cctv-muted); font-size: 12px; margin-left: 6px;">(Hiển thị {{ alerts|length }} cảnh báo)</span>
+    </div>
+    <form method="get" class="filter">
+      <label for="status-filter">Trạng thái</label>
+      <select name="status" id="status-filter">
+        <option value="">Tất cả</option>
+        {% for value,label in statuses %}<option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+      <button class="cctv-btn">Lọc</button>
+    </form>
+  </div>
+
+  {% if alerts %}
+  {% url 'delete_alerts' as delete_alerts_url %}
+  {% if delete_alerts_url %}
+  <form method="post" action="{{ delete_alerts_url }}" id="batch-delete-form">
+    {% csrf_token %}
+    <input type="hidden" name="status" value="{{ status }}">
+    <input type="hidden" name="alert_id" id="single-alert-id" value="">
+
+    <div class="cctv-batch-bar" id="cctv-batch-bar">
+      <div class="cctv-batch-select">
+        <label class="cctv-checkbox-label" for="select-all-alerts">
+          <input type="checkbox" id="select-all-alerts">
+          <span>Chọn tất cả ({{ alerts|length }})</span>
+        </label>
+        <span class="cctv-selected-badge">Đã chọn: <b id="selected-count">0</b></span>
+      </div>
+      <div class="cctv-batch-actions">
+        <button type="submit" class="cctv-btn cctv-danger" id="delete-selected-btn" disabled>
+          🗑 Xóa các cảnh báo đã chọn
+        </button>
+      </div>
+    </div>
+  {% endif %}
+
+    <div class="cctv-alerts-grid">
+      {% for alert in alerts %}
+        <article class="cctv-alert-card" id="card-{{ alert.pk }}">
+          <div class="cctv-alert-top">
+            {% if delete_alerts_url %}
+              <label class="cctv-card-checkbox-label" title="Chọn để xóa">
+                <input type="checkbox" name="alert_ids" value="{{ alert.pk }}" class="alert-checkbox" aria-label="Chọn cảnh báo {{ alert.analysis.source }}">
+              </label>
+            {% endif %}
+            <a href="{% url 'detail' alert.analysis_id %}" class="cctv-alert-preview">
+              <img src="{% url 'evidence' alert.analysis_id 'annotated' %}" alt="Khung hình phát hiện tại {{ alert.analysis.source }}" loading="lazy">
+            </a>
+          </div>
+          <div>
+            <div>
+              <span class="cctv-alert-tag" data-status="{{ alert.status }}">{{ alert.get_status_display }}</span>
+              {% if alert.analysis.mode == 'demo' %}<span class="cctv-alert-tag">Mô phỏng</span>{% endif %}
+            </div>
+            <h2>{{ alert.analysis.source }}</h2>
+            <p>{{ alert.created_at|date:'d/m/Y H:i:s' }}{% if alert.smoke_event %} · {{ alert.smoke_event.positive_samples }} khung có khói{% endif %}</p>
+            <div class="cctv-alert-actions">
+              <a class="cctv-history" href="{% url 'detail' alert.analysis_id %}">Xem và xác minh ↗</a>
+              {% if delete_alerts_url %}
+                <button type="button" class="cctv-btn-delete-card" data-delete-id="{{ alert.pk }}" data-source-name="{{ alert.analysis.source }}">
+                  🗑 Xóa
+                </button>
+              {% endif %}
+            </div>
+          </div>
+        </article>
+      {% endfor %}
+    </div>
+  {% if delete_alerts_url %}</form>{% endif %}
+  {% else %}
+    <div class="cctv-log-empty">
+      <strong>Chưa có cảnh báo phù hợp</strong>
+      <p>Các sự kiện phát hiện khói sẽ xuất hiện tại đây.</p>
+    </div>
+  {% endif %}
+</main>
+
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const form = document.querySelector('#batch-delete-form');
+  if (!form) return;
+
+  const selectAll = document.querySelector('#select-all-alerts');
+  const checkboxes = Array.from(document.querySelectorAll('.alert-checkbox'));
+  const countEl = document.querySelector('#selected-count');
+  const deleteBtn = document.querySelector('#delete-selected-btn');
+  const singleIdInput = document.querySelector('#single-alert-id');
+
+  function updateSelection() {
+    const checked = checkboxes.filter(cb => cb.checked);
+    const count = checked.length;
+    if (countEl) countEl.textContent = count;
+    if (deleteBtn) deleteBtn.disabled = count === 0;
+    if (selectAll) {
+      selectAll.checked = count > 0 && count === checkboxes.length;
+      selectAll.indeterminate = count > 0 && count < checkboxes.length;
+    }
+    checkboxes.forEach(cb => {
+      const card = cb.closest('.cctv-alert-card');
+      if (card) card.classList.toggle('is-selected', cb.checked);
+    });
+  }
+
+  selectAll?.addEventListener('change', () => {
+    checkboxes.forEach(cb => { cb.checked = selectAll.checked; });
+    updateSelection();
+  });
+
+  checkboxes.forEach(cb => {
+    cb.addEventListener('change', updateSelection);
+  });
+
+  form.addEventListener('submit', (e) => {
+    if (singleIdInput.value) {
+      return;
+    }
+    const count = checkboxes.filter(cb => cb.checked).length;
+    if (count === 0) {
+      e.preventDefault();
+      return;
+    }
+    const confirmed = window.confirm(`Bạn có chắc chắn muốn xóa ${count} cảnh báo đã chọn không?\nThao tác này sẽ xóa vĩnh viễn dữ liệu và hình ảnh lưu trữ liên quan.`);
+    if (!confirmed) {
+      e.preventDefault();
+    }
+  });
+
+  document.querySelectorAll('.cctv-btn-delete-card').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      const id = btn.dataset.deleteId;
+      const source = btn.dataset.sourceName || 'cảnh báo này';
+      if (!id) return;
+      if (window.confirm(`Xác nhận xóa cảnh báo tại "${source}"?`)) {
+        checkboxes.forEach(cb => { cb.checked = false; });
+        singleIdInput.value = id;
+        form.submit();
+      }
+    });
+  });
+
+  updateSelection();
+});
+</script>
+{% endblock %}
