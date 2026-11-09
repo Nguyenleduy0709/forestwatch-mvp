@@ -1,0 +1,171 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Phòng giám sát khói — ForestWatch{% endblock %}
+{% block body_class %}cctv-page{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="{% static 'css/control-room.css' %}">
+<script src="{% static 'js/control-room.js' %}" defer></script>
+{% endblock %}
+
+{% block content %}
+<main class="cctv-control-center" id="cctv-room"
+      data-account="{{ request.user.pk }}" data-csrf="{{ csrf_token }}" data-reference="{{ reference_enabled|yesno:'1,0' }}"
+      data-scan="{% url 'scan_frame' %}" data-resolve="{% url 'resolve_video' %}" data-resolve-phone="{% url 'resolve_phone_camera' %}">
+  <header class="cctv-heading">
+    <div>
+      <div class="cctv-kicker"><i></i> FORESTWATCH / CCTV</div>
+      <h1>Phòng giám sát</h1>
+      <p>Quản lý nguồn hình, phát hiện dấu hiệu khói và xác minh bằng chứng.</p>
+    </div>
+    <div class="cctv-clock">
+      <time id="cctv-clock">--:--:--</time>
+      <span id="cctv-date"></span>
+    </div>
+  </header>
+
+  <section class="cctv-stats" aria-label="Tổng quan giám sát">
+    <div><span>Nguồn giám sát</span><strong id="cctv-count">0 / 10</strong></div>
+    <div class="cctv-model-stat"><span>Mô hình nhận diện{% if reference_enabled %} · thử nghiệm{% endif %}</span><strong>{% if mode == 'fosp' %}{{ model_name }}{% else %}{{ mode|upper }}{% endif %}</strong></div>
+    <div><span>Quét tự động</span><strong class="cctv-accent" id="cctv-auto-state">Đang bật</strong></div>
+    <a class="cctv-stat-link" href="{% url 'alerts' %}?status=PENDING"><span>Chờ xác minh ↗</span><strong id="cctv-incident-count">{{ pending_count }}</strong></a>
+  </section>
+
+  <div id="cctv-storage-notice" class="cctv-storage-notice" role="status" hidden></div>
+  <section class="cctv-incident-banner" id="cctv-incident-banner" hidden>
+    <div role="alert"><strong>Có dấu hiệu khói</strong><span id="cctv-incident-source"></span></div>
+    <a class="cctv-btn" id="cctv-incident-link" href="{% url 'alerts' %}">Xem bằng chứng ↗</a>
+    <button class="cctv-icon" type="button" id="cctv-dismiss-incident" aria-label="Ẩn thông báo">×</button>
+  </section>
+
+  <div class="cctv-board">
+    <section class="cctv-wall" aria-labelledby="cctv-wall-title">
+      <div class="cctv-toolbar">
+        <div><h2 id="cctv-wall-title">Màn hình giám sát</h2><p id="cctv-wall-count">4 cửa sổ</p></div>
+        <div class="cctv-actions">
+          <div class="cctv-layout" aria-label="Số cột giám sát">
+            <button type="button" data-cols="1" aria-label="1 cột" aria-pressed="false">1</button>
+            <button type="button" data-cols="2" aria-label="2 cột" aria-pressed="true">2</button>
+            <button type="button" data-cols="3" aria-label="3 cột" aria-pressed="false">3</button>
+            <button type="button" data-cols="4" aria-label="4 cột" aria-pressed="false">4</button>
+            <button type="button" data-cols="5" aria-label="5 cột" aria-pressed="false">5</button>
+          </div>
+          <button type="button" class="cctv-btn" id="cctv-auto" aria-pressed="true">Tạm dừng quét</button>
+          <button type="button" class="cctv-btn cctv-primary" id="cctv-add"><span aria-hidden="true">＋</span> Thêm nguồn</button>
+        </div>
+      </div>
+      <div class="cctv-grid-container" id="cctv-camera-grid" data-cols="2"></div>
+      <noscript>Bật JavaScript để hiển thị các cửa sổ giám sát.</noscript>
+    </section>
+
+    <aside class="cctv-sidebar" aria-labelledby="cctv-log-title">
+      <div class="cctv-log-heading">
+        <div><div class="cctv-kicker">NHẬT KÝ ĐÃ LƯU</div><h2 id="cctv-log-title">Sự kiện gần đây</h2></div>
+        <button type="button" class="cctv-log-clear-btn" id="cctv-clear-log" title="Xóa toàn bộ sự kiện trong nhật ký">Xóa log</button>
+      </div>
+      <div class="cctv-notification-controls">
+        <button type="button" class="cctv-btn" id="cctv-sound" aria-pressed="false">Bật chuông</button>
+        <button type="button" class="cctv-btn" id="cctv-notify">Bật thông báo nền</button>
+        <small id="cctv-notification-state" role="status"></small>
+      </div>
+      <div class="cctv-log-empty" id="cctv-log-empty">
+        <span aria-hidden="true">◎</span>
+        <strong>Chưa có cảnh báo</strong>
+        <p>Sự kiện phát hiện khói sẽ xuất hiện tại đây.</p>
+      </div>
+      <ol class="cctv-log" id="cctv-log" aria-live="polite"></ol>
+      <a href="{% url 'alerts' %}" class="cctv-history">Mở tất cả cảnh báo <span aria-hidden="true">↗</span></a>
+      <div class="cctv-tip">
+        <strong>Lưu bằng chứng từ {{ evidence_threshold }}%</strong>
+        <p>Mỗi đợt giữ khung đầu đạt ngưỡng và thêm khung có vùng khói lớn hơn nếu xuất hiện.</p>
+      </div>
+      <div class="cctv-tip">
+        {% if reference_enabled %}
+          <strong>Nền tham chiếu cho E3</strong>
+          <p>Với camera cố định, lưu một khung không có khói ở cùng góc nhìn. Đổi hoặc bỏ nền khi camera đổi hướng.</p>
+        {% else %}
+          <strong>Kiểm tra đoạn nghi có khói</strong>
+          <p>Chọn 0,5× hoặc 0,25× để lấy mẫu dày hơn. Có thể dừng video rồi chọn Quét ngay.</p>
+        {% endif %}
+      </div>
+    </aside>
+  </div>
+</main>
+{{ recent_events|json_script:"cctv-recent-events" }}
+
+<template id="cctv-card-template">
+  <article class="cctv-card" data-state="empty">
+    <header class="cctv-card-header">
+      <span class="cctv-channel"></span>
+      <h3></h3>
+      <button type="button" class="cctv-icon cctv-settings" title="Đổi nguồn" aria-label="Đổi nguồn" hidden>⚙</button>
+      <button type="button" class="cctv-icon cctv-remove" title="Xóa nguồn và đóng cửa sổ" aria-label="Xóa nguồn và đóng cửa sổ">×</button>
+    </header>
+    <div class="cctv-stage">
+      <div class="cctv-media"></div>
+      <svg class="cctv-overlay" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"></svg>
+      <button type="button" class="cctv-empty-source"><span aria-hidden="true">＋</span> Chọn nguồn</button>
+      <span class="cctv-source-badge" hidden></span>
+    </div>
+    <div class="cctv-card-footer">
+      <span class="cctv-state"><i></i><span></span></span>
+      <label class="cctv-speed" hidden>
+        <span class="cctv-sr-only">Tốc độ phát</span>
+        <select>
+          <option value="0.25">0,25×</option>
+          <option value="0.5">0,5×</option>
+          <option value="0.75">0,75×</option>
+          <option value="1" selected>1×</option>
+        </select>
+      </label>
+      <button type="button" class="cctv-btn cctv-scan" hidden>Quét ngay</button>
+      <button type="button" class="cctv-btn cctv-primary cctv-start" hidden>Bắt đầu quét</button>
+    </div>
+    <div class="cctv-card-detail" hidden></div>
+    <div class="cctv-reference-tools" hidden>
+      <button type="button" class="cctv-reference-set">Lưu khung nền</button>
+      <button type="button" class="cctv-reference-clear" hidden>Bỏ nền</button>
+    </div>
+    <a class="cctv-card-evidence" hidden>Xem bằng chứng ↗</a>
+  </article>
+</template>
+
+<dialog class="cctv-dialog" id="cctv-dialog" aria-labelledby="cctv-dialog-title">
+  <form id="cctv-source-form">
+    <header>
+      <div><div class="cctv-kicker" id="cctv-dialog-channel"></div><h2 id="cctv-dialog-title">Thêm nguồn giám sát</h2></div>
+      <button type="button" class="cctv-icon" data-close-dialog aria-label="Đóng">×</button>
+    </header>
+    <div class="cctv-dialog-fields">
+      <label for="cctv-source-name">Tên nguồn</label>
+      <input id="cctv-source-name" type="text" maxlength="100" placeholder="Ví dụ: Đồi thông phía Bắc">
+      <label for="cctv-source-type">Loại nguồn</label>
+      <select id="cctv-source-type">
+        <option value="video">Tệp video từ máy</option>
+        <option value="url">YouTube hoặc liên kết video</option>
+        <option value="image">Ảnh tĩnh từ máy</option>
+        <option value="phone">Camera điện thoại qua Wi-Fi</option>
+        <option value="webcam">Webcam hoặc camera USB</option>
+      </select>
+      <div id="cctv-file-field">
+        <label for="cctv-source-file" id="cctv-file-label">Chọn tệp</label>
+        <input id="cctv-source-file" type="file" required>
+      </div>
+      <div id="cctv-url-field" hidden>
+        <label for="cctv-source-url" id="cctv-url-label">Liên kết video công khai</label>
+        <input id="cctv-source-url" type="url" maxlength="2048" placeholder="https://…" disabled>
+      </div>
+      <div id="cctv-device-field" hidden>
+        <label for="cctv-source-device">Camera trên máy tính</label>
+        <select id="cctv-source-device"><option value="">Camera mặc định</option></select>
+        <button type="button" class="cctv-btn cctv-list-devices" id="cctv-find-devices">Lấy danh sách camera</button>
+      </div>
+      <p class="cctv-help" id="cctv-source-help"></p>
+      <p class="cctv-form-error" id="cctv-form-error" role="alert" hidden></p>
+    </div>
+    <footer>
+      <button type="button" class="cctv-btn" data-close-dialog>Hủy</button>
+      <button type="submit" class="cctv-btn cctv-primary" id="cctv-source-submit">Lưu nguồn</button>
+    </footer>
+  </form>
+</dialog>
+{% endblock %}

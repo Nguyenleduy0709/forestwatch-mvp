@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.contrib.auth import views as auth
 from django.urls import path
 from monitor import views
+from monitor.phone_camera import phone_camera_frame, resolve_phone_camera
 
 urlpatterns = [
     path('', views.home, name='home'),
@@ -16,5 +17,12 @@ urlpatterns = [
     path('runs/<uuid:pk>/', views.detail, name='detail'),
     path('runs/<uuid:pk>/image/<str:kind>/', views.evidence, name='evidence'),
     path('alerts/', views.alerts, name='alerts'),
+    path('alerts/delete/', views.delete_alerts, name='delete_alerts'),
     path('alerts/<uuid:pk>/transition/', views.transition, name='transition'),
+    path('control-room/', views.control_room, name='control_room'),
+    path('api/scan-frame/', views.scan_frame, name='scan_frame'),
+    path('api/video/resolve/', views.resolve_video, name='resolve_video'),
+    path('api/video/media/<str:token>/', views.relay_video, name='relay_video'),
+    path('api/phone-camera/resolve/', resolve_phone_camera, name='resolve_phone_camera'),
+    path('api/phone-camera/frame/<str:token>/', phone_camera_frame, name='phone_camera_frame'),
 ]

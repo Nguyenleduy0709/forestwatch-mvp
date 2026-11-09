@@ -1,8 +1,20 @@
 import os
+from ipaddress import IPv4Network
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIR = BASE_DIR.parent / 'frontend'
+
+# Auto-load variables from .env in repository root if present
+_env_path = BASE_DIR.parent / '.env'
+if _env_path.is_file():
+    for _line in _env_path.read_text(encoding='utf-8').splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith('#') and '=' in _line:
+            _k, _v = _line.split('=', 1)
+            _k, _v = _k.strip(), _v.strip().strip("'\"")
+            if _k and _k not in os.environ:
+                os.environ[_k] = _v
 DEBUG = os.getenv('DJANGO_DEBUG', '1') == '1'
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'local-demo-only-change-before-deployment')
 if not DEBUG and SECRET_KEY == 'local-demo-only-change-before-deployment':
@@ -33,18 +45,21 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_ROOT = Path(os.getenv('MEDIA_ROOT', str(BASE_DIR / 'media')))
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 LOGIN_URL = 'login'
-LOGIN_REDIRECT_URL = 'dashboard'
+LOGIN_REDIRECT_URL = 'control_room'
 LOGOUT_REDIRECT_URL = 'home'
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '').strip()
 GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '').strip()
 GOOGLE_OAUTH_REDIRECT_URI = os.getenv('GOOGLE_OAUTH_REDIRECT_URI', '').strip()
 DATA_UPLOAD_MAX_MEMORY_SIZE = 12 * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024
-INFERENCE_MODE = os.getenv('INFERENCE_MODE', 'demo').lower()
+INFERENCE_MODE = os.getenv('INFERENCE_MODE', 'fosp').lower()
 MODEL_PATH = os.getenv('MODEL_PATH', str(BASE_DIR / 'weights' / 'best.pt'))
 MODEL_CONFIDENCE = float(os.getenv('MODEL_CONFIDENCE', '0.35'))
 FOSP_MODEL_PATH = Path(os.getenv('FOSP_MODEL_PATH', str(BASE_DIR / 'weights' / 'fosp_best.pth')))
 FOSP_RUNTIME_DIR = Path(os.getenv('FOSP_RUNTIME_DIR', str(BASE_DIR.parent / '.fosp-runtime')))
+PHONE_CAMERA_NETWORKS = tuple(
+    IPv4Network(value.strip()) for value in os.getenv('PHONE_CAMERA_NETWORKS', '').split(',') if value.strip()
+)
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SECURE = not DEBUG
