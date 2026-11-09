@@ -29,12 +29,14 @@
     const dateFormat = new Intl.DateTimeFormat('vi-VN', { dateStyle: 'full' });
     const headers = { 'X-CSRFToken': room.dataset.csrf };
     const scanUrl = room.dataset.scan;
+    const screenReportsUrl = room.dataset.screenReports || '';
+    const phoneQrUrl = room.dataset.phoneQr || '';
     const resolveUrl = room.dataset.resolve;
     const resolvePhoneUrl = room.dataset.resolvePhone;
     const referenceEnabled = room.dataset.reference === '1';
     const account = room.dataset.account;
     const labels = {
-        image: 'Ảnh tĩnh', video: 'Video từ máy', url: 'Liên kết video', webcam: 'Webcam / USB', phone: 'Camera điện thoại',
+        image: 'Ảnh tĩnh', video: 'Video từ máy', url: 'Liên kết video', webcam: 'Webcam / USB', phone: 'Camera điện thoại (QR)',
     };
     let autoEnabled = true;
     let manualLayout = false;
@@ -46,7 +48,8 @@
     let storage = null;
     let audio = null;
     let soundEnabled = false;
-    let inFlight = false;
+    let inFlightCount = 0;
+    const maxConcurrentScans = 2;
     let lastSlot = 0;
     const eventRows = new Map();
     function openStorage() {
@@ -145,7 +148,8 @@
     function updateOverlay(slot) {
         const source = slot.source;
         const media = source?.element;
-        const hide = !source?.frame || !ready(source) || (media instanceof HTMLVideoElement && Math.abs(media.currentTime - source.lastTime) > 0.75) || (source.phoneFrame !== null && source.phoneFrame.sequence !== source.lastTime);
+        const refTime = source?.overlayTime ?? source?.lastTime ?? -1;
+        const hide = !source?.frame || !ready(source) || (media instanceof HTMLVideoElement && !slot.scanning && Math.abs(media.currentTime - refTime) > 8.0) || (source.phoneFrame !== null && !slot.scanning && Math.abs(source.phoneFrame.sequence - source.lastTime) > 4);
         slot.overlay.toggleAttribute('hidden', hide);
     }
     function drawOverlay(slot, result) {
@@ -164,6 +168,13 @@
             rect.setAttribute('width', String(right - x));
             rect.setAttribute('height', String(bottom - y));
             slot.overlay.append(rect);
+            const conf = item.confidence ? `${Math.round(item.confidence * 100)}%` : `${item.mask_coverage ?? ''}%`;
+            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            text.setAttribute('x', String(Math.max(4, x)));
+            text.setAttribute('y', String(Math.max(18, y - 6)));
+            text.setAttribute('class', 'cctv-overlay-label');
+            text.textContent = conf ? `KHÓI · ${conf}` : 'PHÁT HIỆN KHÓI';
+            slot.overlay.append(text);
         }
         updateOverlay(slot);
     }
@@ -183,7 +194,7 @@
             status(slot, 'waiting', autoEnabled ? 'Chờ bắt đầu quét' : 'Quét tự động đang tạm dừng');
         }
         else if (!canScan) {
-            status(slot, 'waiting', slot.saved?.type === 'phone' ? 'Đang chờ camera' : 'Đang tải nguồn');
+            status(slot, 'waiting', slot.saved?.type === 'phone' ? 'Đang chờ điện thoại truyền hình…' : 'Đang tải nguồn');
         }
         else if (source.frame?.has_smoke) {
             status(slot, source.frame.alert ? 'smoke' : 'waiting', source.frame.alert ? 'Có dấu hiệu khói' : 'Dưới ngưỡng lưu');
@@ -207,8 +218,11 @@
             overlay: find('.cctv-overlay'), badge: find('.cctv-source-badge'), status: find('.cctv-state span'),
             settings: find('.cctv-settings'), scan: find('.cctv-scan'), start: find('.cctv-start'), speed: find('.cctv-speed'),
             rate: find('.cctv-speed select'), detail: find('.cctv-card-detail'), evidence: find('.cctv-card-evidence'),
+            phoneQrBtn: find('.cctv-phone-qr-btn'),
+            alertsBtn: find('.cctv-screen-alerts-btn'), alertsCount: find('.cctv-screen-alerts-count'),
             referenceTools: find('.cctv-reference-tools'),
             saved: null, restore: null, source: null, manual: false, scanning: false,
+            captureCount: 0, eventCount: 0, captures: [],
         };
         find('.cctv-channel').textContent = channel(id);
         slot.title.textContent = 'Chưa có nguồn';
@@ -221,6 +235,8 @@
                 openDialog(id);
         });
         slot.settings.addEventListener('click', () => openDialog(id));
+        slot.phoneQrBtn?.addEventListener('click', () => openDialog(id));
+        slot.alertsBtn?.addEventListener('click', () => void openScreenReport(slot));
         const remove = find('.cctv-remove');
         remove.addEventListener('click', async () => {
             if (restoring)
@@ -270,6 +286,10 @@
             slot.manual = true;
             slot.scan.disabled = true;
             status(slot, 'waiting', 'Đang chờ quét');
+            if (slot.source?.element instanceof HTMLVideoElement && slot.source.element.currentTime <= 2.0) {
+                slot.source.videoReplayed = true;
+                void resetVideoAlerts(slot);
+            }
             void scanNext();
         });
         slot.rate.addEventListener('change', () => {
@@ -373,6 +393,10 @@
         slot.badge.hidden = false;
         slot.empty.hidden = true;
         slot.settings.hidden = false;
+        if (slot.phoneQrBtn)
+            slot.phoneQrBtn.hidden = type !== 'phone';
+        if (slot.alertsBtn)
+            slot.alertsBtn.hidden = false;
         slot.speed.hidden = type !== 'video' && type !== 'url';
         slot.referenceTools.hidden = !referenceEnabled || type === 'image';
         showReference(slot);
@@ -380,6 +404,7 @@
         slot.detail.hidden = true;
         slot.overlay.replaceChildren();
         slot.media.replaceChildren(media);
+        void loadScreenStats(slot);
         function onReady() {
             showMediaState(slot, source);
             void scanNext();
@@ -392,6 +417,64 @@
         media.addEventListener('error', () => mediaError(type === 'url'
             ? 'Không phát được. Hãy dùng link trực tiếp MP4/WebM, video YouTube công khai hoặc mở lại nguồn.'
             : 'Không mở được nguồn. Hãy kiểm tra định dạng tệp hoặc kết nối camera.'), options);
+        async function resetVideoAlerts(targetSlot) {
+            if (!targetSlot?.saved) return;
+            targetSlot.captureCount = 0;
+            targetSlot.eventCount = 0;
+            targetSlot.captures = [];
+            if (targetSlot.alertsCount) targetSlot.alertsCount.textContent = '0';
+            if (targetSlot.alertsBtn) {
+                targetSlot.alertsBtn.hidden = true;
+                targetSlot.alertsBtn.classList.remove('has-alerts');
+            }
+            if (targetSlot.evidence) targetSlot.evidence.hidden = true;
+            if (targetSlot.source) {
+                targetSlot.source.lastTime = -1;
+                targetSlot.source.maxSeenPosition = 0;
+                targetSlot.source.videoReplayed = true;
+            }
+
+            const channelName = channel(targetSlot.id);
+            const fullSourceName = targetSlot.saved.name === channelName ? channelName : `${channelName} · ${targetSlot.saved.name}`;
+
+            for (const [id, row] of eventRows) {
+                if (row.dataset.slotId === String(targetSlot.id) || row.dataset.source === fullSourceName) {
+                    eventRows.delete(id);
+                    row.remove();
+                }
+            }
+            if (eventRows.size === 0) {
+                const emptyEl = document.querySelector('#cctv-log-empty');
+                if (emptyEl) emptyEl.hidden = false;
+            }
+
+            if (activeReportSlotId === targetSlot.id) {
+                const gridEl = reportDialog?.querySelector('#cctv-report-captures-grid');
+                const emptyEl = reportDialog?.querySelector('#cctv-report-empty');
+                const capCountEl = reportDialog?.querySelector('#cctv-report-total-captures');
+                const alertCountEl = reportDialog?.querySelector('#cctv-report-total-alerts');
+                if (gridEl) gridEl.replaceChildren();
+                if (emptyEl) emptyEl.hidden = false;
+                if (capCountEl) capCountEl.textContent = '0';
+                if (alertCountEl) alertCountEl.textContent = '0';
+            }
+
+            try {
+                const body = new FormData();
+                body.append('csrfmiddlewaretoken', csrfToken);
+                body.append('delete_all', '1');
+                body.append('source', fullSourceName);
+                if (targetSlot.saved.key) {
+                    body.append('source_key', targetSlot.saved.key);
+                }
+                await fetch('/alerts/delete/', {
+                    method: 'POST',
+                    body,
+                    headers: { 'X-Requested-With': 'XMLHttpRequest' }
+                });
+            } catch (_) {}
+        }
+
         if (media instanceof HTMLVideoElement) {
             media.controls = !clip;
             media.preload = clip ? 'metadata' : 'auto';
@@ -403,17 +486,28 @@
             media.addEventListener('loadedmetadata', () => resumePosition(saved, media), { ...options, once: true });
             media.addEventListener('loadeddata', onReady, options);
             media.addEventListener('playing', onReady, options);
-            if (clip) {
-                media.addEventListener('play', () => {
+            media.addEventListener('play', () => {
+                if (clip) {
                     if (!source.started || !autoEnabled)
                         media.pause();
-                }, options);
-            }
+                }
+                if (source.hasEnded || ((source.maxSeenPosition || 0) > 3.0 && media.currentTime < 1.5)) {
+                    source.hasEnded = false;
+                    void resetVideoAlerts(slot);
+                }
+            }, options);
             media.addEventListener('pause', () => showMediaState(slot, source), options);
-            media.addEventListener('ended', () => showMediaState(slot, source), options);
+            media.addEventListener('ended', () => {
+                source.hasEnded = true;
+                showMediaState(slot, source);
+            }, options);
             let lastPositionWrite = 0;
             media.addEventListener('timeupdate', () => {
+                if (media.currentTime > (source.maxSeenPosition || 0)) {
+                    source.maxSeenPosition = media.currentTime;
+                }
                 updateOverlay(slot);
+                void scanNext();
                 if (performance.now() - lastPositionWrite >= 2500) {
                     rememberPosition(saved, media);
                     lastPositionWrite = performance.now();
@@ -425,6 +519,9 @@
                 updateOverlay(slot);
             }, options);
             media.addEventListener('seeked', () => {
+                if ((source.maxSeenPosition || 0) > 3.0 && media.currentTime < 1.0) {
+                    void resetVideoAlerts(slot);
+                }
                 rememberPosition(saved, media);
                 onReady();
             }, options);
@@ -458,6 +555,14 @@
                             }
                             return;
                         }
+                        if (response.status === 425) {
+                            const waitingData = await response.json().catch(() => null);
+                            source.error = '';
+                            status(slot, 'waiting', 'Chờ điện thoại quét QR');
+                            slot.detail.textContent = waitingData?.message || 'Đang chờ điện thoại quét mã QR và truyền hình về máy tính…';
+                            slot.detail.hidden = false;
+                            return;
+                        }
                         if (response.redirected)
                             throw new Error('Phiên đăng nhập đã hết. Hãy tải lại trang.');
                         if (!response.ok || !response.headers.get('Content-Type')?.startsWith('image/jpeg')) {
@@ -482,7 +587,7 @@
                     }
                     finally {
                         if (!events.signal.aborted)
-                            phoneTimer = window.setTimeout(pollPhone, source.error ? 2000 : 700);
+                            phoneTimer = window.setTimeout(pollPhone, source.error ? 1200 : 180);
                     }
                 };
                 void pollPhone();
@@ -494,33 +599,92 @@
         showMediaState(slot, source);
         updateCounts();
     }
+    async function requestPhoneQr(existingInputUrl = '') {
+        const qrBox = document.querySelector('#cctv-phone-qr-svg');
+        const shareInput = document.querySelector('#cctv-phone-share-url');
+        if (!qrBox || !phoneQrUrl)
+            return;
+        qrBox.innerHTML = '<span>Đang tạo mã QR kết nối điện thoại…</span>';
+        try {
+            const body = new FormData();
+            if (existingInputUrl.startsWith('qr:')) {
+                const res = await api(resolvePhoneUrl, (() => { const f = new FormData(); f.append('url', existingInputUrl); return f; })());
+                if (res.qr_svg && res.share_url) {
+                    qrBox.innerHTML = res.qr_svg;
+                    if (shareInput)
+                        shareInput.value = res.share_url;
+                    urlInput.value = res.input_url || existingInputUrl;
+                    return;
+                }
+            }
+            const data = await api(phoneQrUrl, body);
+            if (data.qr_svg) {
+                qrBox.innerHTML = data.qr_svg;
+            }
+            if (shareInput && data.share_url) {
+                shareInput.value = data.share_url;
+            }
+            if (data.input_url) {
+                urlInput.value = data.input_url;
+            }
+        }
+        catch {
+            qrBox.innerHTML = '<span>Không tạo được mã QR. Hãy thử lại.</span>';
+        }
+    }
+    document.querySelector('#cctv-copy-phone-url')?.addEventListener('click', async () => {
+        const shareInput = document.querySelector('#cctv-phone-share-url');
+        const copyBtn = document.querySelector('#cctv-copy-phone-url');
+        if (!shareInput?.value)
+            return;
+        try {
+            await navigator.clipboard.writeText(shareInput.value);
+            if (copyBtn) {
+                copyBtn.textContent = 'Đã sao chép!';
+                window.setTimeout(() => { copyBtn.textContent = 'Sao chép link'; }, 1800);
+            }
+        }
+        catch {
+            shareInput.select();
+        }
+    });
     function showSourceFields() {
         const type = typeInput.value;
         const useFile = type === 'image' || type === 'video';
-        const useUrl = type === 'url' || type === 'phone';
+        const useUrl = type === 'url';
+        const usePhoneQr = type === 'phone';
         get('#cctv-file-field').hidden = !useFile;
         get('#cctv-url-field').hidden = !useUrl;
+        const qrField = document.querySelector('#cctv-phone-qr-field');
+        if (qrField)
+            qrField.hidden = !usePhoneQr;
         get('#cctv-device-field').hidden = type !== 'webcam';
         fileInput.disabled = !useFile;
         fileInput.value = '';
         const previous = editing === null ? null : slots.get(editing)?.saved;
         const keepFile = previous?.type === type ? previous.file : null;
         fileInput.required = useFile && !keepFile;
-        urlInput.disabled = !useUrl;
+        urlInput.disabled = !useUrl && !usePhoneQr;
         urlInput.required = useUrl;
-        get('#cctv-url-label').textContent = type === 'phone' ? 'Địa chỉ camera trên điện thoại' : 'Liên kết video công khai';
-        urlInput.placeholder = type === 'phone' ? 'http://192.168.1.20:8080' : 'https://…';
+        get('#cctv-url-label').textContent = 'Liên kết video công khai';
+        urlInput.placeholder = 'https://…';
         fileInput.accept = type === 'image' ? 'image/jpeg,image/png,image/webp' : 'video/*,.mp4,.webm';
         get('#cctv-file-label').textContent = type === 'image' ? 'Chọn ảnh' : 'Chọn video';
         const hints = {
             image: 'Ảnh JPG, PNG hoặc WebP, tối đa 10 MB. Ảnh được quét một lần khi mở nguồn.',
-            video: 'Ưu tiên MP4 hoặc WebM. Video sẽ phát một lần (không lặp lại) và được quét khi đang phát.',
+            video: 'Ưu tiên MP4 hoặc WebM. Video sẽ phát một lần (không lặp lại) và được quét liên tục khi đang phát.',
             url: 'Dùng video YouTube công khai hoặc URL trả về tệp video mà trình duyệt phát được, như MP4 hoặc WebM.',
             webcam: 'Trình duyệt sẽ hỏi quyền truy cập camera. Dùng HTTPS hoặc localhost để kết nối.',
-            phone: 'Bật ứng dụng camera IP trên điện thoại ở cùng Wi-Fi và nhập địa chỉ cổng 8080. ForestWatch sẽ lấy các khung hình JPEG để giám sát.',
+            phone: 'Dùng điện thoại quét mã QR ở trên để mở giao diện Share Cam, sau đó bấm Lưu nguồn để thu trực tiếp hình từ điện thoại lên màn hình này.',
         };
         get('#cctv-source-help').textContent = keepFile ? `Đang dùng ${keepFile.name}. Chọn tệp nếu muốn thay.` : hints[type];
         formError.hidden = true;
+        if (usePhoneQr) {
+            const existingQr = previous?.type === 'phone' && previous.inputUrl.startsWith('qr:') ? previous.inputUrl : '';
+            if (!existingQr)
+                urlInput.value = 'qr:new';
+            void requestPhoneQr(existingQr);
+        }
         if (type === 'webcam') {
             const selected = previous?.deviceId ?? '';
             deviceInput.replaceChildren(new Option('Camera mặc định', ''));
@@ -570,8 +734,10 @@
     async function prepareSource(source, signal) {
         if (source.type === 'url' || source.type === 'phone') {
             const body = new FormData();
-            body.append('url', source.inputUrl);
+            body.append('url', source.inputUrl || (source.type === 'phone' ? 'qr:new' : ''));
             const resolved = await api(source.type === 'phone' ? resolvePhoneUrl : resolveUrl, body, signal);
+            if (source.type === 'phone' && resolved.input_url)
+                source.inputUrl = resolved.input_url;
             return { label: resolved.type ?? labels[source.type], playback: resolved.url, stream: null };
         }
         let stream = null;
@@ -724,6 +890,7 @@
             return;
         }
         const entry = document.createElement('li');
+        entry.dataset.source = incident.source;
         const image = document.createElement('img');
         image.src = incident.thumbnail;
         image.alt = '';
@@ -813,7 +980,7 @@
     }
     function needsScan(slot) {
         const source = slot.source;
-        if (!source?.started || !ready(source))
+        if (!source?.started || slot.scanning || !ready(source))
             return false;
         if (slot.manual)
             return true;
@@ -828,7 +995,7 @@
         return !source.frame;
     }
     async function scanNext() {
-        if (inFlight)
+        if (inFlightCount >= maxConcurrentScans)
             return;
         const ordered = Array.from(slots.values()).sort((a, b) => a.id - b.id);
         const candidates = ordered.filter(slot => slot.id > lastSlot).concat(ordered.filter(slot => slot.id <= lastSlot));
@@ -838,7 +1005,7 @@
         if (!slot || !source || !saved)
             return;
         lastSlot = slot.id;
-        inFlight = true;
+        inFlightCount += 1;
         slot.manual = false;
         slot.scanning = true;
         slot.scan.disabled = true;
@@ -850,6 +1017,21 @@
         const mediaTime = phoneFrame?.sequence ?? (media instanceof HTMLVideoElement ? media.currentTime : 0);
         const moving = (phoneFrame !== null || media instanceof HTMLVideoElement && !media.paused)
             && mediaTime !== source.lastTime;
+        if (media instanceof HTMLVideoElement) {
+            const isAtBeginning = mediaTime <= 2.0;
+            const rewoundToBeginning = (source.maxSeenPosition || 0) > 3.0 && isAtBeginning;
+            if (rewoundToBeginning || (isAtBeginning && !source.runCleaned)) {
+                source.runCleaned = true;
+                source.videoReplayed = true;
+                void resetVideoAlerts(slot);
+            }
+            if (mediaTime > (source.maxSeenPosition || 0)) {
+                source.maxSeenPosition = mediaTime;
+                if (mediaTime > 3.0) {
+                    source.runCleaned = false;
+                }
+            }
+        }
         try {
             const body = new FormData();
             const frame = phoneFrame?.image ?? source.imageFile ?? await captureFrame(source);
@@ -863,15 +1045,35 @@
                 body.append('reference', saved.reference, 'reference.jpg');
             if (saved.type === 'video' || saved.type === 'url')
                 body.append('position', String(mediaTime));
+            if (source.videoReplayed) {
+                body.append('video_replayed', '1');
+                source.videoReplayed = false;
+            }
             const result = await api(scanUrl, body, AbortSignal.timeout(180000));
             if (slots.get(slot.id)?.source !== source)
                 return;
             source.lastTime = mediaTime;
+            source.overlayTime = media instanceof HTMLVideoElement ? media.currentTime : mediaTime;
             source.frame = result;
-            source.nextScan = performance.now() + 700;
+            source.nextScan = performance.now();
             if (result.event) {
                 slot.evidence.href = result.event.url;
                 slot.evidence.hidden = false;
+                slot.captureCount = (slot.captureCount || 0) + (result.event.latest_capture ? 1 : 0);
+                if (result.event_created)
+                    slot.eventCount = (slot.eventCount || 0) + 1;
+                if (result.event.latest_capture) {
+                    slot.captures = [result.event.latest_capture, ...(slot.captures || []).filter(c => c.id !== result.event.latest_capture.id)].slice(0, 80);
+                }
+                if (slot.alertsCount)
+                    slot.alertsCount.textContent = String(slot.captureCount || slot.eventCount || 1);
+                if (slot.alertsBtn) {
+                    slot.alertsBtn.hidden = false;
+                    slot.alertsBtn.classList.add('has-alerts');
+                }
+                if (activeReportSlotId === slot.id && result.event.latest_capture) {
+                    livePrependCaptureToModal(slot, result.event.latest_capture);
+                }
                 displayIncident(result.event, result.event_created);
                 if (result.event_created)
                     announceIncident(result.event);
@@ -895,20 +1097,210 @@
         catch (error) {
             if (slots.get(slot.id)?.source !== source)
                 return;
-            source.nextScan = performance.now() + 5000;
+            source.nextScan = performance.now() + 2000;
             status(slot, 'error', 'Lỗi quét');
             slot.detail.textContent = error instanceof Error ? error.message : 'Không quét được khung hình.';
             slot.detail.hidden = false;
         }
         finally {
-            inFlight = false;
+            inFlightCount = Math.max(0, inFlightCount - 1);
             if (slots.get(slot.id)?.source === source) {
                 slot.scanning = false;
                 slot.scan.textContent = 'Quét ngay';
                 slot.scan.disabled = !ready(source) || slot.manual;
             }
+            window.setTimeout(() => void scanNext(), 10);
         }
     }
+    let activeReportSlotId = null;
+    let reportViewMode = 'annotated';
+    const reportDialog = document.querySelector('#cctv-screen-report-dialog');
+    function slotSourceLabel(slot) {
+        const channelName = channel(slot.id);
+        const saved = slot.saved;
+        if (!saved)
+            return channelName;
+        return saved.name === channelName ? channelName : `${channelName} · ${saved.name}`;
+    }
+    async function loadScreenStats(slot) {
+        if (!screenReportsUrl || !slot.saved)
+            return null;
+        try {
+            const params = new URLSearchParams({
+                source_key: slot.saved.key,
+                source: slotSourceLabel(slot),
+            });
+            const response = await fetch(`${screenReportsUrl}?${params.toString()}`, {
+                headers: { Accept: 'application/json' },
+            });
+            if (!response.ok)
+                return null;
+            const data = await response.json();
+            slot.captureCount = data.total_captures || 0;
+            slot.eventCount = data.total_alerts || 0;
+            slot.captures = data.captures || [];
+            if (slot.alertsCount)
+                slot.alertsCount.textContent = String(slot.captureCount || slot.eventCount || 0);
+            if (slot.alertsBtn) {
+                slot.alertsBtn.hidden = false;
+                slot.alertsBtn.classList.toggle('has-alerts', (slot.captureCount || slot.eventCount) > 0);
+            }
+            if (data.events?.[0]?.url) {
+                slot.evidence.href = data.events[0].url;
+                slot.evidence.hidden = false;
+            }
+            return data;
+        }
+        catch {
+            return null;
+        }
+    }
+    function renderCaptureCard(cap, mode = reportViewMode) {
+        const card = document.createElement('article');
+        card.className = 'cctv-capture-item';
+        card.dataset.captureId = String(cap.id);
+        card.dataset.annotated = cap.annotated_url;
+        card.dataset.original = cap.original_url;
+        const imgLink = document.createElement('a');
+        imgLink.href = cap.event_url || cap.annotated_url;
+        imgLink.className = 'cctv-capture-thumb';
+        const img = document.createElement('img');
+        img.src = mode === 'original' ? cap.original_url : cap.annotated_url;
+        img.alt = `Ảnh chụp khói ${cap.created_at}`;
+        img.loading = 'lazy';
+        imgLink.append(img);
+        const meta = document.createElement('div');
+        meta.className = 'cctv-capture-meta';
+        const top = document.createElement('div');
+        top.className = 'cctv-capture-top';
+        const timeEl = document.createElement('strong');
+        timeEl.textContent = cap.created_at;
+        const badge = document.createElement('span');
+        badge.className = 'badge badge-danger';
+        badge.textContent = `Khói · ${Math.round((cap.confidence || cap.score || 0) * 100)}%`;
+        top.append(timeEl, badge);
+        const sub = document.createElement('p');
+        const pos = cap.position !== null && cap.position !== undefined
+            ? `Giây ${Number(cap.position).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} · `
+            : '';
+        sub.textContent = `${pos}Vùng khói ${Math.round((cap.score || 0) * 1000) / 10}% · ${cap.elapsed_ms || 0} ms`;
+        const links = document.createElement('div');
+        links.className = 'cctv-capture-links';
+        if (cap.event_url) {
+            const detailLink = document.createElement('a');
+            detailLink.href = cap.event_url;
+            detailLink.textContent = 'Mở báo cáo chi tiết ↗';
+            links.append(detailLink);
+        }
+        const rawLink = document.createElement('a');
+        rawLink.href = cap.annotated_url;
+        rawLink.target = '_blank';
+        rawLink.rel = 'noopener';
+        rawLink.textContent = 'Ảnh phóng to';
+        links.append(rawLink);
+        meta.append(top, sub, links);
+        card.append(imgLink, meta);
+        return card;
+    }
+    function livePrependCaptureToModal(slot, cap) {
+        if (!reportDialog?.open || activeReportSlotId !== slot.id)
+            return;
+        const gridEl = reportDialog.querySelector('#cctv-report-captures-grid');
+        const emptyEl = reportDialog.querySelector('#cctv-report-empty');
+        const capCountEl = reportDialog.querySelector('#cctv-report-total-captures');
+        const alertCountEl = reportDialog.querySelector('#cctv-report-total-alerts');
+        if (capCountEl)
+            capCountEl.textContent = String(slot.captureCount || 1);
+        if (alertCountEl)
+            alertCountEl.textContent = String(slot.eventCount || 1);
+        if (emptyEl)
+            emptyEl.hidden = true;
+        if (gridEl && !gridEl.querySelector(`[data-capture-id="${cap.id}"]`)) {
+            gridEl.prepend(renderCaptureCard(cap, reportViewMode));
+        }
+    }
+    async function openScreenReport(slot) {
+        if (!reportDialog)
+            return;
+        activeReportSlotId = slot.id;
+        const label = slotSourceLabel(slot);
+        const titleEl = reportDialog.querySelector('#cctv-report-dialog-title');
+        const subEl = reportDialog.querySelector('#cctv-report-dialog-subtitle');
+        const capCountEl = reportDialog.querySelector('#cctv-report-total-captures');
+        const alertCountEl = reportDialog.querySelector('#cctv-report-total-alerts');
+        const fullLinkEl = reportDialog.querySelector('#cctv-report-full-link');
+        const emptyEl = reportDialog.querySelector('#cctv-report-empty');
+        const gridEl = reportDialog.querySelector('#cctv-report-captures-grid');
+        if (titleEl)
+            titleEl.textContent = `Báo cáo khói: ${label}`;
+        if (subEl)
+            subEl.textContent = 'Đang tải chuỗi ảnh chụp liên tục từ màn hình này…';
+        if (gridEl)
+            gridEl.replaceChildren();
+        if (!reportDialog.open)
+            reportDialog.showModal();
+        const data = await loadScreenStats(slot);
+        if (activeReportSlotId !== slot.id)
+            return;
+        const captures = data?.captures ?? slot.captures ?? [];
+        if (subEl)
+            subEl.textContent = 'Tự động chụp và lưu liên tục mọi khung hình phát hiện khói trên màn hình này.';
+        if (capCountEl)
+            capCountEl.textContent = String(data?.total_captures ?? captures.length);
+        if (alertCountEl)
+            alertCountEl.textContent = String(data?.total_alerts ?? slot.eventCount ?? 0);
+        if (fullLinkEl && data?.alerts_url)
+            fullLinkEl.href = data.alerts_url;
+        if (emptyEl)
+            emptyEl.hidden = captures.length > 0;
+        if (gridEl) {
+            gridEl.replaceChildren(...captures.map(cap => renderCaptureCard(cap, reportViewMode)));
+        }
+    }
+    reportDialog?.querySelector('#cctv-close-report-dialog')?.addEventListener('click', () => {
+        reportDialog.close();
+    });
+    reportDialog?.addEventListener('close', () => {
+        activeReportSlotId = null;
+    });
+    const modeAnnotatedBtn = reportDialog?.querySelector('#cctv-report-mode-annotated');
+    const modeOriginalBtn = reportDialog?.querySelector('#cctv-report-mode-original');
+    function setReportViewMode(mode) {
+        reportViewMode = mode;
+        modeAnnotatedBtn?.classList.toggle('is-active', mode === 'annotated');
+        modeOriginalBtn?.classList.toggle('is-active', mode === 'original');
+        reportDialog?.querySelectorAll('.cctv-capture-item').forEach(card => {
+            const img = card.querySelector('img');
+            if (img)
+                img.src = (mode === 'original' ? card.dataset.original : card.dataset.annotated) || img.src;
+        });
+    }
+    const clearReportBtn = reportDialog?.querySelector('#cctv-report-clear-btn');
+    clearReportBtn?.addEventListener('click', async () => {
+        if (!activeReportSlotId) return;
+        const targetSlot = slots.get(activeReportSlotId);
+        if (!targetSlot) return;
+        if (!confirm('Bạn có chắc chắn muốn xóa toàn bộ cảnh báo của màn hình này không?'))
+            return;
+        clearReportBtn.disabled = true;
+        clearReportBtn.textContent = 'Đang xóa…';
+        try {
+            await resetVideoAlerts(targetSlot);
+            const gridEl = reportDialog.querySelector('#cctv-report-captures-grid');
+            const emptyEl = reportDialog.querySelector('#cctv-report-empty');
+            const capCountEl = reportDialog.querySelector('#cctv-report-total-captures');
+            const alertCountEl = reportDialog.querySelector('#cctv-report-total-alerts');
+            if (gridEl) gridEl.replaceChildren();
+            if (emptyEl) emptyEl.hidden = false;
+            if (capCountEl) capCountEl.textContent = '0';
+            if (alertCountEl) alertCountEl.textContent = '0';
+        } finally {
+            clearReportBtn.disabled = false;
+            clearReportBtn.textContent = '🧹 Xóa cảnh báo màn hình này';
+        }
+    });
+    modeAnnotatedBtn?.addEventListener('click', () => setReportViewMode('annotated'));
+    modeOriginalBtn?.addEventListener('click', () => setReportViewMode('original'));
     typeInput.addEventListener('change', showSourceFields);
     findDevices.addEventListener('click', async () => {
         findDevices.disabled = true;
@@ -1034,5 +1426,5 @@
     }
     updateClock();
     window.setInterval(updateClock, 1000);
-    window.setInterval(() => void scanNext(), 250);
+    window.setInterval(() => void scanNext(), 50);
 })();
