@@ -3,6 +3,7 @@ from ipaddress import IPv4Network
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from PIL import Image
@@ -59,3 +60,38 @@ class PhoneCameraTest(TestCase):
             connection.assert_called_once_with('192.168.10.22', port=8080, timeout=2)
             remote.request.assert_called_once()
             remote.close.assert_called_once()
+
+    def test_qr_code_phone_share_and_push_flow(self):
+        qr_res = self.client.post(reverse('create_phone_qr'))
+        self.assertEqual(qr_res.status_code, 200)
+        qr_data = qr_res.json()
+        self.assertIn('<svg', qr_data['qr_svg'])
+        token = qr_data['token']
+        frame_url = qr_data['frame_url']
+
+        # Before phone pushes any frame, frame_url returns 425 waiting
+        waiting = self.client.get(frame_url)
+        self.assertEqual(waiting.status_code, 425)
+
+        # Phone opens share page without login
+        self.client.logout()
+        share_page = self.client.get(reverse('phone_camera_share', args=[token]))
+        self.assertEqual(share_page.status_code, 200)
+        self.assertContains(share_page, 'Share Cam')
+
+        # Phone pushes a JPEG frame
+        buf = BytesIO()
+        Image.new('RGB', (320, 180), '#335544').save(buf, 'JPEG')
+        push_res = self.client.post(
+            reverse('phone_camera_push', args=[token]),
+            {'frame': SimpleUploadedFile('frame.jpg', buf.getvalue(), 'image/jpeg')},
+        )
+        self.assertEqual(push_res.status_code, 200)
+        self.assertEqual(push_res.json()['sequence'], 1)
+
+        # Computer fetches frame
+        self.client.force_login(self.owner)
+        frame_res = self.client.get(frame_url)
+        self.assertEqual(frame_res.status_code, 200)
+        self.assertEqual(frame_res['Content-Type'], 'image/jpeg')
+        self.assertEqual(self.client.get(frame_url, headers={'If-None-Match': frame_res['ETag']}).status_code, 304)
