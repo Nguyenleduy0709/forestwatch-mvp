@@ -121,6 +121,38 @@
       </section>
     {% endif %}
 
+    {% if screen_captures %}
+      <section class="panel result-panel" style="grid-column: 1 / -1;">
+        <div class="panel-heading" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <h2>📸 Chuỗi ảnh chụp khói liên tục từ {{ run.source }} ({{ screen_captures|length }} khung hình)</h2>
+          <a class="cctv-btn" href="{% url 'alerts' %}?source={{ run.source|urlencode }}">Mở toàn bộ lịch sử màn hình này ↗</a>
+        </div>
+        <div class="cctv-report-captures-grid" style="margin-top: 12px;">
+          {% for cap in screen_captures %}
+            <article class="cctv-capture-item">
+              <a href="{% url 'capture_image' cap.pk 'annotated' %}" target="_blank" rel="noopener" class="cctv-capture-thumb">
+                <img src="{% url 'capture_image' cap.pk 'annotated' %}" alt="Khung hình chụp lúc {{ cap.created_at|date:'H:i:s' }}" loading="lazy">
+              </a>
+              <div class="cctv-capture-meta">
+                <div class="cctv-capture-top">
+                  <strong>{{ cap.created_at|date:'H:i:s d/m/Y' }}</strong>
+                  <span class="badge badge-danger">Khói · {% widthratio cap.confidence 1 100 %}%</span>
+                </div>
+                <p>
+                  {% if cap.position is not None %}Giây {{ cap.position|floatformat:1 }} · {% endif %}
+                  Vùng khói {{ cap.score|floatformat:1 }}% · {{ cap.elapsed_ms }} ms
+                </p>
+                <div class="cctv-capture-links">
+                  <a href="{% url 'capture_image' cap.pk 'annotated' %}?download=1">Tải ảnh khoanh vùng ↓</a>
+                  <a href="{% url 'capture_image' cap.pk 'original' %}?download=1">Ảnh gốc ↓</a>
+                </div>
+              </div>
+            </article>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
     <!-- Panel xác minh sự kiện & lịch sử -->
     <aside class="panel">
       <div class="panel-heading">

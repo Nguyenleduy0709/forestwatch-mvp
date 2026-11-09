@@ -10,7 +10,7 @@ from django.test import TestCase
 from django.urls import reverse
 from PIL import Image
 
-from .models import Alert, SmokeEvent
+from .models import Alert, SmokeCapture, SmokeEvent
 
 
 class SmokeEventsTest(TestCase):
@@ -119,3 +119,41 @@ class SmokeEventsTest(TestCase):
         self.assertTrue(first_event.closed)
         self.assertEqual(first_event.alert.analysis.model_name, 'best.pth')
         self.assertEqual(second_event.alert.analysis.model_name, 'E3_concat_best.pth')
+
+    def test_per_screen_captures_and_screen_separation(self):
+        self.scan(2.5, confidence=0.72, position=1.0)
+        self.scan(3.8, confidence=0.81, position=2.5)
+        self.scan(4.2, confidence=0.88, position=4.0)
+        self.assertEqual(SmokeCapture.objects.filter(owner=self.owner).count(), 3)
+
+        alerts_res = self.client.get(reverse('alerts'), {'source': 'CAM 01 · Trạm rừng'})
+        self.assertEqual(alerts_res.status_code, 200)
+        self.assertContains(alerts_res, '3 khung hình đã chụp')
+
+        caps = list(SmokeCapture.objects.filter(owner=self.owner))
+        del_res = self.client.post(reverse('delete_alerts'), {'capture_ids': [str(caps[0].pk)]})
+        self.assertEqual(del_res.status_code, 302)
+        self.assertEqual(SmokeCapture.objects.filter(owner=self.owner).count(), 2)
+
+    def test_video_replay_automatically_deletes_old_alerts_and_captures(self):
+        first = self.scan(2.5, position=2.0)
+        self.assertTrue(first['event_created'])
+        second = self.scan(4.0, position=8.0)
+        self.assertEqual(SmokeCapture.objects.filter(owner=self.owner).count(), 2)
+
+        # Video replays back to beginning (position 0.5 < first_position 2.0)
+        replayed = self.scan(3.1, position=0.5)
+        self.assertTrue(replayed['event_created'])
+        # Old captures should have been cleared, leaving only the new one from position 0.5
+        self.assertEqual(SmokeCapture.objects.filter(owner=self.owner).count(), 1)
+        self.assertEqual(SmokeCapture.objects.filter(owner=self.owner).first().position, 0.5)
+
+    def test_duplicate_captures_at_near_identical_timestamps_are_skipped(self):
+        self.scan(2.0, position=3.0)
+        self.assertEqual(SmokeCapture.objects.filter(owner=self.owner).count(), 1)
+        # Scan again at position 3.2 (within 0.45s)
+        self.scan(2.5, position=3.2)
+        self.assertEqual(SmokeCapture.objects.filter(owner=self.owner).count(), 1)
+        # Scan at position 4.5 (different timestamp)
+        self.scan(3.0, position=4.5)
+        self.assertEqual(SmokeCapture.objects.filter(owner=self.owner).count(), 2)

@@ -62,3 +62,23 @@ class SmokeEvent(models.Model):
                 fields=['source_key'], condition=models.Q(closed=False), name='monitor_one_open_smoke_event',
             ),
         ]
+
+
+class SmokeCapture(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    event = models.ForeignKey(SmokeEvent, on_delete=models.CASCADE, related_name='captures', null=True, blank=True)
+    alert = models.ForeignKey(Alert, on_delete=models.CASCADE, related_name='captures', null=True, blank=True)
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='smoke_captures')
+    source = models.CharField(max_length=120, db_index=True)
+    source_key = models.UUIDField(null=True, blank=True, db_index=True)
+    position = models.FloatField(null=True, blank=True)
+    score = models.FloatField(default=0)
+    confidence = models.FloatField(default=0)
+    detections = models.JSONField(default=list)
+    elapsed_ms = models.PositiveIntegerField(default=0)
+    original = models.ImageField(upload_to='captures/original/%Y/%m/')
+    annotated = models.ImageField(upload_to='captures/annotated/%Y/%m/', blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ['-created_at']
