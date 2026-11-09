@@ -1,94 +1,144 @@
 {% extends 'base.html' %}
 {% load static %}
-{% block title %}Cảnh báo khói — ForestWatch{% endblock %}
+{% block title %}Cảnh báo theo màn hình — ForestWatch{% endblock %}
 {% block body_class %}cctv-page cctv-evidence-page{% endblock %}
 {% block head %}<link rel="stylesheet" href="{% static 'css/control-room.css' %}">{% endblock %}
 {% block content %}
 <main class="cctv-control-center cctv-review">
   <header class="cctv-heading">
     <div>
-      <div class="cctv-kicker">FORESTWATCH / NHẬT KÝ</div>
-      <h1>Cảnh báo khói</h1>
-      <p>Đối chiếu bằng chứng và cập nhật kết quả xác minh.</p>
+      <div class="cctv-kicker">FORESTWATCH / BÁO CÁO THEO TỪNG MÀN HÌNH GIÁM SÁT</div>
+      <h1>Cảnh báo & Lịch sử quét theo màn hình</h1>
+      <p>Mỗi màn hình giám sát có khu vực lưu trữ riêng biệt — mọi lần quét phát hiện khói đều được chụp và lưu lại đầy đủ.</p>
     </div>
-    <a class="cctv-btn" href="{% url 'control_room' %}">← Phòng giám sát</a>
+    <a class="cctv-btn" href="{% url 'control_room' %}">← Quay lại Phòng giám sát</a>
   </header>
-  <div class="cctv-review-tools">
-    <div>
-      <strong>{{ pending_count }} cảnh báo chờ xác minh</strong>
-      <span style="color: var(--cctv-muted); font-size: 12px; margin-left: 6px;">(Hiển thị {{ alerts|length }} cảnh báo)</span>
-    </div>
-    <form method="get" class="filter">
-      <label for="status-filter">Trạng thái</label>
-      <select name="status" id="status-filter">
-        <option value="">Tất cả</option>
-        {% for value,label in statuses %}<option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
-      </select>
-      <button class="cctv-btn">Lọc</button>
-    </form>
-  </div>
 
-  {% if alerts %}
-  {% url 'delete_alerts' as delete_alerts_url %}
-  {% if delete_alerts_url %}
-  <form method="post" action="{{ delete_alerts_url }}" id="batch-delete-form">
-    {% csrf_token %}
-    <input type="hidden" name="status" value="{{ status }}">
-    <input type="hidden" name="alert_id" id="single-alert-id" value="">
-
-    <div class="cctv-batch-bar" id="cctv-batch-bar">
-      <div class="cctv-batch-select">
-        <label class="cctv-checkbox-label" for="select-all-alerts">
-          <input type="checkbox" id="select-all-alerts">
-          <span>Chọn tất cả ({{ alerts|length }})</span>
-        </label>
-        <span class="cctv-selected-badge">Đã chọn: <b id="selected-count">0</b></span>
+  <section class="cctv-screen-switcher" aria-label="Chọn màn hình giám sát">
+    <div class="cctv-screen-switcher-header">
+      <div>
+        <div class="cctv-kicker">DANH SÁCH MÀN HÌNH GIÁM SÁT ({{ screen_tabs|length }} MÀN HÌNH)</div>
+        <h2>Chọn màn hình để xem toàn bộ lịch sử quét</h2>
       </div>
-      <div class="cctv-batch-actions">
-        <button type="submit" class="cctv-btn cctv-danger" id="delete-selected-btn" disabled>
-          🗑 Xóa các cảnh báo đã chọn
-        </button>
-      </div>
+      <form method="get" class="filter">
+        {% if selected_source %}<input type="hidden" name="source" value="{{ selected_source }}">{% endif %}
+        <label for="status-filter">Trạng thái xác minh</label>
+        <select name="status" id="status-filter">
+          <option value="">Tất cả trạng thái</option>
+          {% for value,label in statuses %}<option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+        </select>
+        <button class="cctv-btn">Lọc</button>
+      </form>
     </div>
-  {% endif %}
 
-    <div class="cctv-alerts-grid">
-      {% for alert in alerts %}
-        <article class="cctv-alert-card" id="card-{{ alert.pk }}">
-          <div class="cctv-alert-top">
-            {% if delete_alerts_url %}
-              <label class="cctv-card-checkbox-label" title="Chọn để xóa">
-                <input type="checkbox" name="alert_ids" value="{{ alert.pk }}" class="alert-checkbox" aria-label="Chọn cảnh báo {{ alert.analysis.source }}">
-              </label>
-            {% endif %}
-            <a href="{% url 'detail' alert.analysis_id %}" class="cctv-alert-preview">
-              <img src="{% url 'evidence' alert.analysis_id 'annotated' %}" alt="Khung hình phát hiện tại {{ alert.analysis.source }}" loading="lazy">
-            </a>
-          </div>
-          <div>
-            <div>
-              <span class="cctv-alert-tag" data-status="{{ alert.status }}">{{ alert.get_status_display }}</span>
-              {% if alert.analysis.mode == 'demo' %}<span class="cctv-alert-tag">Mô phỏng</span>{% endif %}
+    {% if screen_tabs %}
+      <div class="cctv-screen-tabs" role="tablist">
+        {% for tab in screen_tabs %}
+          <a href="{{ tab.url }}" class="cctv-screen-tab {% if tab.active %}is-active{% endif %}" role="tab" aria-selected="{{ tab.active|yesno:'true,false' }}">
+            <div class="cctv-screen-tab-top">
+              <span class="cctv-screen-tab-icon">🖥️</span>
+              <strong>{{ tab.source }}</strong>
             </div>
-            <h2>{{ alert.analysis.source }}</h2>
-            <p>{{ alert.created_at|date:'d/m/Y H:i:s' }}{% if alert.smoke_event %} · {{ alert.smoke_event.positive_samples }} khung có khói{% endif %}</p>
-            <div class="cctv-alert-actions">
-              <a class="cctv-history" href="{% url 'detail' alert.analysis_id %}">Xem và xác minh ↗</a>
-              {% if delete_alerts_url %}
-                <button type="button" class="cctv-btn-delete-card" data-delete-id="{{ alert.pk }}" data-source-name="{{ alert.analysis.source }}">
-                  🗑 Xóa
-                </button>
+            <div class="cctv-screen-tab-meta">
+              <span class="cctv-screen-tab-count">{{ tab.capture_count }} lần quét</span>
+              {% if tab.latest_at %}
+                <small>Mới nhất: {{ tab.latest_at|date:'H:i:s d/m' }}</small>
               {% endif %}
             </div>
+          </a>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
+
+  {% if selected_source and screen_captures %}
+    {% url 'delete_alerts' as delete_alerts_url %}
+    <section class="cctv-screen-captures-panel">
+      <header class="cctv-screen-captures-header">
+        <div>
+          <div class="cctv-kicker">📸 LỊCH SỬ QUÉT RIÊNG CỦA MÀN HÌNH</div>
+          <h2>{{ selected_source }} <span class="cctv-count-pill">{{ screen_captures|length }} khung hình đã chụp</span></h2>
+          <p>Hiển thị riêng biệt toàn bộ các lần quét phát hiện khói của màn hình <b>{{ selected_source }}</b>.</p>
+        </div>
+      </header>
+
+      <form method="post" action="{{ delete_alerts_url }}" id="batch-delete-form">
+        {% csrf_token %}
+        <input type="hidden" name="status" value="{{ status }}">
+        <input type="hidden" name="source" value="{{ selected_source }}">
+        <input type="hidden" name="capture_id" id="single-capture-id" value="">
+        <input type="hidden" name="alert_id" id="single-alert-id" value="">
+        <input type="hidden" name="delete_all" id="delete-all-input" value="">
+
+        <div class="cctv-batch-bar" id="cctv-batch-bar">
+          <div class="cctv-batch-select">
+            <label class="cctv-check-pill" for="select-all-alerts">
+              <input type="checkbox" id="select-all-alerts" class="cctv-custom-check">
+              <span>Chọn tất cả màn hình này ({{ screen_captures|length }})</span>
+            </label>
+            <button type="button" class="cctv-btn cctv-btn-ghost" id="clear-selection-btn" hidden>Bỏ chọn</button>
+            <span class="cctv-selected-badge">Đã chọn: <b id="selected-count">0</b> / {{ screen_captures|length }} bản ghi</span>
           </div>
-        </article>
-      {% endfor %}
-    </div>
-  {% if delete_alerts_url %}</form>{% endif %}
+          <div class="cctv-batch-actions">
+            <button type="submit" class="cctv-btn cctv-danger" id="delete-selected-btn" disabled>
+              🗑 Xóa mục đã chọn
+            </button>
+            <button type="button" class="cctv-btn cctv-danger-outline" id="delete-all-screen-btn" data-screen-name="{{ selected_source }}" data-total="{{ screen_captures|length }}">
+              🧹 Xóa toàn bộ màn hình này
+            </button>
+          </div>
+        </div>
+
+        <div class="cctv-alerts-grid">
+          {% for cap in screen_captures %}
+            <article class="cctv-alert-card" id="card-{{ cap.pk }}">
+              <div class="cctv-card-select-bar" data-toggle-card>
+                <label class="cctv-card-check-pill" title="Tick chọn bản ghi quét này" onclick="event.stopPropagation()">
+                  <input type="checkbox" name="capture_ids" value="{{ cap.pk }}" class="alert-checkbox cctv-custom-check" aria-label="Chọn bản ghi {{ cap.source }} lúc {{ cap.created_at|date:'H:i:s' }}">
+                  <span class="cctv-check-text">Chọn</span>
+                </label>
+                <span class="cctv-scan-time-badge">⏱ {{ cap.created_at|date:'H:i:s · d/m/Y' }}</span>
+              </div>
+
+              <div class="cctv-alert-top">
+                <a href="{% if cap.alert_id %}{% url 'detail' cap.alert.analysis_id %}{% else %}{% url 'capture_image' cap.pk 'annotated' %}{% endif %}" class="cctv-alert-preview">
+                  <img src="{% url 'capture_image' cap.pk 'annotated' %}" alt="Ảnh quét khói tại {{ cap.source }} lúc {{ cap.created_at|date:'H:i:s' }}" loading="lazy">
+                </a>
+              </div>
+
+              <div class="cctv-alert-body">
+                <div class="cctv-alert-tags-row">
+                  {% if cap.alert %}
+                    <span class="cctv-alert-tag" data-status="{{ cap.alert.status }}">{{ cap.alert.get_status_display }}</span>
+                  {% endif %}
+                  <span class="cctv-alert-tag cctv-smoke-score-tag">Khói · {% widthratio cap.confidence 1 100 %}%</span>
+                  {% if cap.position is not None %}
+                    <span class="cctv-alert-tag">Giây {{ cap.position|floatformat:1 }}</span>
+                  {% endif %}
+                </div>
+                <h2>{{ cap.source }}</h2>
+                <p>Vùng khói {{ cap.score|floatformat:1 }}% · Độ tin cậy {% widthratio cap.confidence 1 100 %}% · Thời gian quét {{ cap.elapsed_ms }} ms</p>
+                <div class="cctv-alert-actions">
+                  <div class="cctv-alert-links">
+                    {% if cap.alert_id %}
+                      <a class="cctv-history" href="{% url 'detail' cap.alert.analysis_id %}">Xem & xác minh ↗</a>
+                    {% endif %}
+                    <a class="cctv-history" href="{% url 'capture_image' cap.pk 'annotated' %}" target="_blank" rel="noopener">Ảnh phóng to ↗</a>
+                  </div>
+                  <button type="button" class="cctv-btn-delete-card" data-delete-capture-id="{{ cap.pk }}" data-source-name="{{ cap.source }} ({{ cap.created_at|date:'H:i:s' }})">
+                    🗑 Xóa
+                  </button>
+                </div>
+              </div>
+            </article>
+          {% endfor %}
+        </div>
+      </form>
+    </section>
   {% else %}
     <div class="cctv-log-empty">
-      <strong>Chưa có cảnh báo phù hợp</strong>
-      <p>Các sự kiện phát hiện khói sẽ xuất hiện tại đây.</p>
+      <strong>Chưa có bản ghi quét khói nào{% if selected_source %} cho màn hình {{ selected_source }}{% endif %}</strong>
+      <p>Khi các cửa sổ trong Phòng giám sát quét phát hiện khói, từng khung hình sẽ tự động lưu riêng theo từng màn hình tại đây.</p>
     </div>
   {% endif %}
 </main>
@@ -99,23 +149,34 @@ document.addEventListener('DOMContentLoaded', () => {
   if (!form) return;
 
   const selectAll = document.querySelector('#select-all-alerts');
+  const clearBtn = document.querySelector('#clear-selection-btn');
   const checkboxes = Array.from(document.querySelectorAll('.alert-checkbox'));
   const countEl = document.querySelector('#selected-count');
   const deleteBtn = document.querySelector('#delete-selected-btn');
-  const singleIdInput = document.querySelector('#single-alert-id');
+  const deleteAllBtn = document.querySelector('#delete-all-screen-btn');
+  const singleCaptureInput = document.querySelector('#single-capture-id');
+  const singleAlertInput = document.querySelector('#single-alert-id');
+  const deleteAllInput = document.querySelector('#delete-all-input');
+  let lastCheckedIndex = null;
 
   function updateSelection() {
     const checked = checkboxes.filter(cb => cb.checked);
     const count = checked.length;
     if (countEl) countEl.textContent = count;
-    if (deleteBtn) deleteBtn.disabled = count === 0;
+    if (clearBtn) clearBtn.hidden = count === 0;
+    if (deleteBtn) {
+      deleteBtn.disabled = count === 0;
+      deleteBtn.textContent = count > 0 ? `🗑 Xóa ${count} mục đã chọn` : '🗑 Xóa mục đã chọn';
+    }
     if (selectAll) {
       selectAll.checked = count > 0 && count === checkboxes.length;
       selectAll.indeterminate = count > 0 && count < checkboxes.length;
     }
     checkboxes.forEach(cb => {
       const card = cb.closest('.cctv-alert-card');
+      const textEl = card?.querySelector('.cctv-check-text');
       if (card) card.classList.toggle('is-selected', cb.checked);
+      if (textEl) textEl.textContent = cb.checked ? 'Đã chọn' : 'Chọn';
     });
   }
 
@@ -124,12 +185,38 @@ document.addEventListener('DOMContentLoaded', () => {
     updateSelection();
   });
 
-  checkboxes.forEach(cb => {
-    cb.addEventListener('change', updateSelection);
+  clearBtn?.addEventListener('click', () => {
+    checkboxes.forEach(cb => { cb.checked = false; });
+    updateSelection();
+  });
+
+  checkboxes.forEach((cb, index) => {
+    cb.addEventListener('click', (e) => {
+      if (e.shiftKey && lastCheckedIndex !== null && lastCheckedIndex !== index) {
+        const [start, end] = [Math.min(lastCheckedIndex, index), Math.max(lastCheckedIndex, index)];
+        for (let i = start; i <= end; i++) {
+          checkboxes[i].checked = cb.checked;
+        }
+      }
+      lastCheckedIndex = index;
+      updateSelection();
+    });
+  });
+
+  document.querySelectorAll('[data-toggle-card]').forEach(bar => {
+    bar.addEventListener('click', (e) => {
+      if (e.target.closest('a, button, label, input')) return;
+      const card = bar.closest('.cctv-alert-card');
+      const cb = card?.querySelector('.alert-checkbox');
+      if (cb) {
+        cb.checked = !cb.checked;
+        updateSelection();
+      }
+    });
   });
 
   form.addEventListener('submit', (e) => {
-    if (singleIdInput.value) {
+    if (singleCaptureInput.value || singleAlertInput.value || deleteAllInput.value) {
       return;
     }
     const count = checkboxes.filter(cb => cb.checked).length;
@@ -137,21 +224,35 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       return;
     }
-    const confirmed = window.confirm(`Bạn có chắc chắn muốn xóa ${count} cảnh báo đã chọn không?\nThao tác này sẽ xóa vĩnh viễn dữ liệu và hình ảnh lưu trữ liên quan.`);
-    if (!confirmed) {
+    if (!window.confirm(`Bạn có chắc chắn muốn xóa ${count} bản ghi quét đã chọn không?`)) {
       e.preventDefault();
+    }
+  });
+
+  deleteAllBtn?.addEventListener('click', () => {
+    const screenName = deleteAllBtn.dataset.screenName || 'màn hình này';
+    const total = deleteAllBtn.dataset.total || '';
+    if (window.confirm(`Xác nhận xóa toàn bộ ${total} bản ghi quét của màn hình "${screenName}"?`)) {
+      checkboxes.forEach(cb => { cb.checked = false; });
+      singleCaptureInput.value = '';
+      singleAlertInput.value = '';
+      deleteAllInput.value = '1';
+      form.submit();
     }
   });
 
   document.querySelectorAll('.cctv-btn-delete-card').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.preventDefault();
-      const id = btn.dataset.deleteId;
-      const source = btn.dataset.sourceName || 'cảnh báo này';
-      if (!id) return;
-      if (window.confirm(`Xác nhận xóa cảnh báo tại "${source}"?`)) {
+      const capId = btn.dataset.deleteCaptureId;
+      const alertId = btn.dataset.deleteId;
+      const source = btn.dataset.sourceName || 'bản ghi này';
+      if (!capId && !alertId) return;
+      if (window.confirm(`Xác nhận xóa bản ghi quét tại "${source}"?`)) {
         checkboxes.forEach(cb => { cb.checked = false; });
-        singleIdInput.value = id;
+        deleteAllInput.value = '';
+        if (capId) singleCaptureInput.value = capId;
+        if (alertId) singleAlertInput.value = alertId;
         form.submit();
       }
     });
