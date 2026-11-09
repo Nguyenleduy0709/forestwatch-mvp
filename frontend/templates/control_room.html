@@ -10,7 +10,9 @@
 {% block content %}
 <main class="cctv-control-center" id="cctv-room"
       data-account="{{ request.user.pk }}" data-csrf="{{ csrf_token }}" data-reference="{{ reference_enabled|yesno:'1,0' }}"
-      data-scan="{% url 'scan_frame' %}" data-resolve="{% url 'resolve_video' %}" data-resolve-phone="{% url 'resolve_phone_camera' %}">
+      data-scan="{% url 'scan_frame' %}" data-screen-reports="{% url 'screen_reports_api' %}"
+      data-resolve="{% url 'resolve_video' %}" data-resolve-phone="{% url 'resolve_phone_camera' %}"
+      data-phone-qr="{% url 'create_phone_qr' %}">
   <header class="cctv-heading">
     <div>
       <div class="cctv-kicker"><i></i> FORESTWATCH / CCTV</div>
@@ -117,6 +119,8 @@
           <option value="1" selected>1×</option>
         </select>
       </label>
+      <button type="button" class="cctv-btn cctv-phone-qr-btn" hidden>📱 Mã QR</button>
+      <button type="button" class="cctv-btn cctv-screen-alerts-btn" hidden>🔔 Xem cảnh báo (<span class="cctv-screen-alerts-count">0</span>)</button>
       <button type="button" class="cctv-btn cctv-scan" hidden>Quét ngay</button>
       <button type="button" class="cctv-btn cctv-primary cctv-start" hidden>Bắt đầu quét</button>
     </div>
@@ -143,7 +147,7 @@
         <option value="video">Tệp video từ máy</option>
         <option value="url">YouTube hoặc liên kết video</option>
         <option value="image">Ảnh tĩnh từ máy</option>
-        <option value="phone">Camera điện thoại qua Wi-Fi</option>
+        <option value="phone">Camera điện thoại (Quét mã QR)</option>
         <option value="webcam">Webcam hoặc camera USB</option>
       </select>
       <div id="cctv-file-field">
@@ -152,7 +156,20 @@
       </div>
       <div id="cctv-url-field" hidden>
         <label for="cctv-source-url" id="cctv-url-label">Liên kết video công khai</label>
-        <input id="cctv-source-url" type="url" maxlength="2048" placeholder="https://…" disabled>
+        <input id="cctv-source-url" type="text" maxlength="2048" placeholder="https://…" disabled>
+      </div>
+      <div id="cctv-phone-qr-field" class="cctv-phone-qr-box" hidden>
+        <div class="cctv-qr-header">
+          <strong>📱 Quét mã QR bằng điện thoại để truyền Camera trực tiếp</strong>
+          <span>Điện thoại và máy tính kết nối cùng mạng Wi-Fi</span>
+        </div>
+        <div class="cctv-qr-preview" id="cctv-phone-qr-svg">
+          <span>Đang tạo mã QR…</span>
+        </div>
+        <div class="cctv-qr-link-row">
+          <input type="text" id="cctv-phone-share-url" readonly value="" aria-label="Đường dẫn chia sẻ camera điện thoại">
+          <button type="button" class="cctv-btn" id="cctv-copy-phone-url">Sao chép link</button>
+        </div>
       </div>
       <div id="cctv-device-field" hidden>
         <label for="cctv-source-device">Camera trên máy tính</label>
@@ -167,5 +184,34 @@
       <button type="submit" class="cctv-btn cctv-primary" id="cctv-source-submit">Lưu nguồn</button>
     </footer>
   </form>
+</dialog>
+
+<dialog class="cctv-dialog cctv-screen-report-dialog" id="cctv-screen-report-dialog" aria-labelledby="cctv-report-dialog-title">
+  <header>
+    <div>
+      <div class="cctv-kicker"><i></i> BÁO CÁO KHÓI RIÊNG THEO MÀN HÌNH GIÁM SÁT</div>
+      <h2 id="cctv-report-dialog-title">Báo cáo màn hình</h2>
+    </div>
+    <div class="cctv-report-header-actions">
+      <button type="button" class="cctv-btn" id="cctv-report-clear-btn" style="background: rgba(220, 38, 38, 0.2); border: 1px solid rgba(220, 38, 38, 0.5); color: #fca5a5;">🧹 Xóa cảnh báo màn hình này</button>
+      <a class="cctv-btn" id="cctv-report-full-link" href="{% url 'alerts' %}">Mở trang quản lý màn hình này ↗</a>
+      <button type="button" class="cctv-icon" id="cctv-close-report-dialog" aria-label="Đóng">×</button>
+    </div>
+  </header>
+  <div class="cctv-report-body">
+    <div class="cctv-report-summary">
+      <div><span class="cctv-live-pill">● GHI HÌNH LIÊN TỤC</span> <strong id="cctv-report-dialog-subtitle">Các khung hình phát hiện khói từ màn hình này</strong></div>
+      <div class="cctv-report-mode-toggle">
+        <button type="button" class="cctv-btn is-active" id="cctv-report-mode-annotated">Ảnh khoanh vùng khói</button>
+        <button type="button" class="cctv-btn" id="cctv-report-mode-original">Ảnh gốc</button>
+      </div>
+      <div><span>Tổng số lần quét đã lưu: <b id="cctv-report-total-captures">0</b></span> · <span>Đợt cảnh báo: <b id="cctv-report-total-alerts">0</b></span></div>
+    </div>
+    <div id="cctv-report-empty" class="cctv-report-empty" hidden>
+      <strong>Chưa có khung hình khói nào được ghi nhận trên màn hình này.</strong>
+      <p>Khi phát hiện khói, hệ thống sẽ tự động chụp liên tục và hiển thị trực tiếp tại đây.</p>
+    </div>
+    <div class="cctv-report-captures-grid" id="cctv-report-captures-grid"></div>
+  </div>
 </dialog>
 {% endblock %}
