@@ -1,9 +1,229 @@
-{% extends 'base.html' %}{% block title %}Kết quả phân tích — ForestWatch{% endblock %}{% block content %}<main class="workspace observation-workspace"><a class="back" href="{% url 'dashboard' %}">← Quay lại giám sát</a><div class="page-heading"><div><span class="eyebrow">BẰNG CHỨNG HIỆN TRƯỜNG</span><h1>{{ run.source }}</h1><p>{{ run.created_at|date:'d/m/Y H:i:s' }} · {{ run.elapsed_ms }} ms xử lý</p></div><span class="mode-badge {% if run.mode == 'demo' %}demo{% endif %}">{% if run.mode == 'demo' %}KẾT QUẢ MÔ PHỎNG{% elif run.mode == 'fosp' %}KẾT QUẢ FOSP{% else %}KẾT QUẢ YOLO{% endif %}</span></div>
-{% if run.mode == 'demo' %}<div class="notice">Khung màu cam là vùng dựng sẵn cho tình huống demo, không phải kết quả nhận diện khói từ AI. Thời gian xử lý ở trên là thời gian mô phỏng.</div>{% endif %}
-<div class="observation-stack"><section class="panel result-panel"><div class="panel-heading"><h2>Ảnh bằng chứng</h2><div class="segmented"><button class="selected" data-image-url="{% url 'evidence' run.pk 'annotated' %}">Kết quả</button><button data-image-url="{% url 'evidence' run.pk 'original' %}">Ảnh gốc</button></div></div><img class="result-image" id="result-image" src="{% url 'evidence' run.pk 'annotated' %}" alt="Ảnh kết quả phân tích"><div class="observation-metrics" aria-label="Thông số lần phân tích">
-<div><span>Nguồn ảnh</span><strong>{{ run.source }}</strong></div>
-<div><span>Thời gian ghi nhận</span><strong>{{ run.created_at|date:'d/m/Y H:i:s' }}</strong></div>
-{% if run.mode != 'fosp' %}<div><span>Vùng phát hiện{% if run.mode == 'demo' %} mô phỏng{% endif %}</span><strong>{{ run.detections|length }}</strong></div>{% endif %}
-<div><span>Trạng thái</span><strong>{% if run.alert %}{{ run.alert.get_status_display }}{% else %}Không có phát hiện{% endif %}</strong></div>
-</div><div class="detection-list"><h3>Chi tiết phát hiện</h3>{% for detection in run.detections %}<div><strong>{{ detection.label }}</strong><span>{% if run.mode == 'demo' %}Mô phỏng · Không có điểm AI{% elif run.mode == 'fosp' %}Diện tích tô màu: {{ detection.mask_coverage|floatformat:2 }}% ảnh{% else %}Điểm model: {{ detection.confidence|floatformat:3 }}{% endif %}</span></div>{% empty %}<p>Không có phát hiện ở lần phân tích này. Kết quả không chứng minh hiện trường an toàn tuyệt đối.</p>{% endfor %}</div></section>
-<aside class="panel"><div class="panel-heading"><h2>Xác minh sự kiện</h2></div>{% if run.alert %}<span class="pill warning">{{ run.alert.get_status_display }}</span><p>Kiểm tra ảnh bằng chứng trước khi cập nhật trạng thái.</p><form method="post" action="{% url 'transition' run.alert.pk %}">{% csrf_token %}<label for="note">Ghi chú xử lý</label><textarea id="note" name="note" rows="3" maxlength="500" placeholder="Nhận xét của người giám sát…"></textarea><div class="actions">{% if run.alert.status == 'PENDING' %}<button class="button" name="status" value="CONFIRMED">Xác nhận</button><button class="button secondary" name="status" value="REJECTED">Từ chối</button>{% elif run.alert.status == 'CONFIRMED' %}<button class="button" name="status" value="RESOLVED">Đánh dấu đã xử lý</button>{% else %}<p>Sự kiện đã đóng, lịch sử được giữ lại.</p>{% endif %}</div></form><h3 class="history-title">Lịch sử xử lý</h3><ol class="timeline"><li><strong>Tạo cảnh báo</strong><small>{{ run.alert.created_at|date:'d/m H:i:s' }}</small></li>{% for entry in run.alert.history.all %}<li><strong>{{ entry.old_status }} → {{ entry.new_status }}</strong><small>{{ entry.actor.username }} · {{ entry.created_at|date:'d/m H:i:s' }}</small>{% if entry.note %}<p>{{ entry.note }}</p>{% endif %}</li>{% endfor %}</ol>{% else %}<div class="empty"><span>✓</span><h3>Chưa tạo cảnh báo</h3><p>Lần phân tích này không trả về đối tượng khói hoặc lửa.</p></div>{% endif %}</aside></div></main>{% endblock %}
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Bằng chứng hiện trường — ForestWatch{% endblock %}
+{% block body_class %}cctv-page cctv-evidence-page{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'css/control-room.css' %}">{% endblock %}
+{% block content %}
+<main class="workspace observation-workspace">
+  <div class="breadcrumb-bar">
+    <a class="back" href="{% if run.alert %}{% url 'alerts' %}{% else %}{% url 'control_room' %}{% endif %}">← {% if run.alert %}Cảnh báo{% else %}Phòng giám sát{% endif %}</a>
+    {% if event %}<a class="cctv-history" href="{% url 'control_room' %}">Về phòng giám sát ↗</a>{% else %}<a class="quick-jump-btn" href="#quick-analyze-panel">Tải ảnh khác ↓</a>{% endif %}
+  </div>
+
+  <div class="page-heading">
+    <div>
+      <span class="eyebrow">BẰNG CHỨNG HIỆN TRƯỜNG</span>
+      <h1>{{ run.source }}</h1>
+      <p>{{ run.created_at|date:'d/m/Y H:i:s' }} · {{ run.elapsed_ms }} ms thời gian phân tích</p>
+    </div>
+    <span class="mode-badge {% if run.mode == 'demo' %}demo{% endif %}">
+      {% if run.mode == 'demo' %}KẾT QUẢ MÔ PHỎNG{% elif run.mode == 'fosp' %}FOSP{% if run.model_name %} · {{ run.model_name }}{% endif %}{% else %}{{ run.model_name|default:'YOLO' }}{% endif %}
+    </span>
+  </div>
+
+  {% if run.mode == 'demo' %}
+    <div class="notice">
+      Khung đánh dấu và thời gian xử lý trên trang này thuộc chế độ mô phỏng.
+    </div>
+  {% endif %}
+
+  <div class="observation-stack">
+    <!-- Panel bằng chứng & kết quả -->
+    <section class="panel result-panel">
+      <div class="panel-heading">
+        <h2>{% if event %}Khung có dấu hiệu khói đầu tiên{% else %}Ảnh bằng chứng và phân tích{% endif %}</h2>
+        <div class="segmented" id="image-view-controls">
+          <button type="button" class="selected" id="btn-view-annotated" data-view="annotated">Ảnh đánh dấu</button>
+          <button type="button" id="btn-view-original" data-view="original">Ảnh gốc</button>
+          <button type="button" id="btn-view-split" data-view="split">So sánh song song</button>
+        </div>
+      </div>
+
+      <!-- Single view -->
+      <div id="single-image-view">
+        <img class="result-image" id="result-image" src="{% url 'evidence' run.pk 'annotated' %}" alt="Ảnh kết quả phân tích">
+      </div>
+
+      <!-- Side-by-side split view (ẩn mặc định) -->
+      <div id="split-image-view" class="side-by-side-wrap" hidden>
+        <figure>
+          <img src="{% url 'evidence' run.pk 'original' %}" alt="Ảnh gốc">
+          <figcaption>1. Ảnh gốc hiện trường</figcaption>
+        </figure>
+        <figure>
+          <img src="{% url 'evidence' run.pk 'annotated' %}" alt="Ảnh phân tích">
+          <figcaption>2. Vùng nhận diện khói rừng</figcaption>
+        </figure>
+      </div>
+
+      <div class="actions cctv-downloads">
+        <a class="cctv-btn" href="{% url 'evidence' run.pk 'original' %}?download=1">Tải ảnh gốc ↓</a>
+        <a class="cctv-btn" href="{% url 'evidence' run.pk 'annotated' %}?download=1">Tải ảnh đánh dấu ↓</a>
+      </div>
+
+      <div class="observation-metrics" aria-label="Thông số lần phân tích">
+        <div>
+          <span>Nguồn ảnh</span>
+          <strong>{{ run.source }}</strong>
+        </div>
+        <div>
+          <span>Thời gian ghi nhận</span>
+          <strong>{{ run.created_at|date:'d/m/Y H:i:s' }}</strong>
+          {% if event.first_position is not None %}<span>Giây {{ event.first_position|floatformat:1 }} trong video</span>{% endif %}
+        </div>
+        {% if event %}
+          <div><span>Khung hình có dấu hiệu khói</span><strong>{{ event.positive_samples }}</strong></div>
+          <div><span>Ghi nhận gần nhất</span><strong>{{ event.last_seen|date:'d/m/Y H:i:s' }}</strong></div>
+        {% endif %}
+        {% if run.mode != 'fosp' %}
+          <div>
+            <span>Vùng khói{% if run.mode == 'demo' %} mô phỏng{% endif %}</span>
+            <strong>{{ run.detections|length }} mục</strong>
+          </div>
+        {% endif %}
+        <div>
+          <span>Trạng thái cảnh báo</span>
+          <strong>{% if run.alert %}{{ run.alert.get_status_display }}{% else %}Chưa ghi nhận khói{% endif %}</strong>
+        </div>
+      </div>
+
+      <div class="detection-list">
+        <h3>Vùng khói ghi nhận</h3>
+        {% for detection in run.detections %}
+          <div>
+            <strong>Khói</strong>
+            <span>
+              {% if run.mode == 'demo' %}
+                Vùng mô phỏng
+              {% elif run.mode == 'fosp' %}
+                Độ phủ mặt nạ khói: {{ detection.mask_coverage|floatformat:2 }}% diện tích ảnh
+                {% if detection.confidence %} · Điểm nhận diện: {% widthratio detection.confidence 1 100 %}%{% endif %}
+              {% else %}
+                Điểm tin cậy (Confidence): {{ detection.confidence|floatformat:3 }}
+              {% endif %}
+            </span>
+          </div>
+        {% empty %}
+          <p>Chưa ghi nhận khói trong khung hình này.</p>
+        {% endfor %}
+      </div>
+    </section>
+
+    {% if event.peak_annotated %}
+      <section class="panel result-panel">
+        <div class="panel-heading"><h2>{% if run.mode == 'fosp' %}Khung có vùng khói lớn nhất{% else %}Khung có điểm nhận diện cao nhất{% endif %}</h2></div>
+        <p>{{ event.peak_at|date:'d/m/Y H:i:s' }}{% if event.peak_position is not None %} · giây {{ event.peak_position|floatformat:1 }} trong video{% endif %}</p>
+        <img class="result-image" src="{% url 'evidence' run.pk 'peak_annotated' %}" alt="Khung hình có vùng nhận diện đã đánh dấu" loading="lazy">
+        <div class="actions cctv-downloads">
+          <a class="cctv-btn" href="{% url 'evidence' run.pk 'peak_original' %}?download=1">Tải ảnh gốc ↓</a>
+          <a class="cctv-btn" href="{% url 'evidence' run.pk 'peak_annotated' %}?download=1">Tải ảnh đánh dấu ↓</a>
+        </div>
+      </section>
+    {% endif %}
+
+    <!-- Panel xác minh sự kiện & lịch sử -->
+    <aside class="panel">
+      <div class="panel-heading">
+        <h2>Xác minh cảnh báo</h2>
+      </div>
+      {% if run.alert %}
+        <span class="pill warning">{{ run.alert.get_status_display }}</span>
+        <p>Kiểm tra ảnh bằng chứng trước khi cập nhật trạng thái sự cố.</p>
+        <form method="post" action="{% url 'transition' run.alert.pk %}">
+          {% csrf_token %}
+          <label for="note">Ghi chú xác minh / xử lý</label>
+          <textarea id="note" name="note" rows="3" maxlength="500" placeholder="Ghi nhận xét của người giám sát tại hiện trường…"></textarea>
+          <div class="actions">
+            {% if run.alert.status == 'PENDING' %}
+              <button class="button" name="status" value="CONFIRMED">Xác nhận có khói</button>
+              <button class="button secondary" name="status" value="REJECTED">Từ chối (Báo động giả)</button>
+            {% elif run.alert.status == 'CONFIRMED' %}
+              <button class="button" name="status" value="RESOLVED">Đánh dấu đã xử lý xong</button>
+            {% else %}
+              <p>Sự kiện đã đóng, lịch sử được lưu trữ vĩnh viễn.</p>
+            {% endif %}
+          </div>
+        </form>
+
+        <h3 class="history-title">Nhật ký xử lý</h3>
+        <ol class="timeline">
+          <li>
+            <strong>Tạo cảnh báo tự động</strong>
+            <small>{{ run.alert.created_at|date:'d/m H:i:s' }}</small>
+          </li>
+          {% for entry in run.alert.history.all %}
+            <li>
+              <strong>{{ entry.old_status }} → {{ entry.new_status }}</strong>
+              <small>{{ entry.actor.username }} · {{ entry.created_at|date:'d/m H:i:s' }}</small>
+              {% if entry.note %}<p>{{ entry.note }}</p>{% endif %}
+            </li>
+          {% endfor %}
+        </ol>
+      {% else %}
+        <div class="empty">
+          <span>✓</span>
+          <h3>Chưa tạo cảnh báo</h3>
+          <p>Lần phân tích này không phát hiện dấu hiệu khói rừng bất thường.</p>
+        </div>
+      {% endif %}
+    </aside>
+
+    <!-- Panel Tải ảnh khác ngay trong cửa sổ giám sát -->
+    {% if not event %}<section class="panel observation-card quick-upload-panel" id="quick-analyze-panel">
+      <div class="panel-heading">
+        <h2>⚡ Phân tích ảnh khác ngay tại đây</h2>
+        <span>GIÁM SÁT LIÊN TỤC</span>
+      </div>
+
+      <form method="post" action="{% url 'analyze' %}" enctype="multipart/form-data" id="quick-upload-form" class="fw-upload-form">
+        {% csrf_token %}
+        <div class="upload-tabs" role="tablist">
+          <button type="button" class="tab-btn active" data-tab="quick-tab-file">📁 Tải từ máy tính</button>
+          <button type="button" class="tab-btn" data-tab="quick-tab-url">🔗 Link ảnh / Google Drive</button>
+        </div>
+
+        <div id="quick-tab-file" class="tab-panel active">
+          <label class="dropzone" for="quick-image-input">
+            <span class="upload-symbol">↥</span>
+            <strong id="quick-file-label">Chọn ảnh tiếp theo để phân tích</strong>
+            <span>Hỗ trợ JPG, PNG, WebP · tối đa 10 MB</span>
+            <img id="quick-upload-preview" alt="Ảnh đã chọn" hidden>
+          </label>
+          <input id="quick-image-input" type="file" name="image" accept="image/jpeg,image/png,image/webp">
+        </div>
+
+        <div id="quick-tab-url" class="tab-panel">
+          <label for="quick-image-url-input">Dán đường dẫn ảnh hoặc link Google Drive mới</label>
+          <div class="url-input-wrap">
+            <input id="quick-image-url-input" type="url" name="image_url" placeholder="https://drive.google.com/file/d/... hoặc https://.../image.jpg">
+            <button type="button" class="btn-preview-url" id="quick-btn-preview-url">Xem trước</button>
+          </div>
+          <p class="url-help-text">
+            💡 Link Google Drive (chế độ công khai "Bất kỳ ai có liên kết") hoặc link ảnh trực tiếp.
+          </p>
+          <div class="url-preview-box" id="quick-url-preview-box">
+            <img id="quick-url-preview-img" alt="Xem trước" hidden>
+            <span id="quick-url-preview-placeholder">Ảnh xem trước từ liên kết mới sẽ hiển thị tại đây</span>
+          </div>
+        </div>
+
+        <label for="quick-source">Tên nguồn ảnh</label>
+        <input id="quick-source" name="source" maxlength="120" required value="{{ run.source }}">
+
+        {% if mode == 'demo' %}
+          <div class="notice">
+            <p>Chọn tình huống mô phỏng cho ảnh tiếp theo:</p>
+            <div class="checkbox-group">
+              <label class="checkbox"><input type="checkbox" name="simulate_smoke" checked> Mô phỏng phát hiện khói</label>
+            </div>
+          </div>
+        {% endif %}
+
+        <button class="button full" id="quick-analyze-button">
+          Phân tích ảnh này ngay ↗
+        </button>
+      </form>
+    </section>{% endif %}
+  </div>
+</main>
+{% endblock %}
