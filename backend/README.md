@@ -34,8 +34,11 @@ Mở http://127.0.0.1:8000. Không cần một server frontend riêng. Không m�
 
 | Phương thức | Route | Chức năng |
 | --- | --- | --- |
-| GET / POST | `/login/` | Đăng nhập bằng session |
-| POST | `/logout/` | Đăng xuất |
+| GET / POST | `/register/` | Đăng ký tài khoản mới (tên đăng nhập, email, mật khẩu) |
+| GET / POST | `/login/` | Đăng nhập bằng session hoặc tài khoản hệ thống |
+| POST / GET | `/logout/` | Đăng xuất |
+| GET | `/auth/google/login/` | Chuyển hướng đăng nhập bằng tài khoản Google (OAuth 2.0) |
+| GET | `/auth/google/callback/` | Nhận mã xác thực Google OAuth và đăng nhập session |
 | GET | `/dashboard/` | Tải ảnh, xem lịch sử và tổng quan |
 | POST | `/analyze/` | Multipart: `image`, `source`, `simulate_smoke` tùy chọn |
 | GET | `/runs/<uuid>/` | Ảnh và thông số, thao tác xác minh |
@@ -44,6 +47,19 @@ Mở http://127.0.0.1:8000. Không cần một server frontend riêng. Không m�
 | POST | `/alerts/<uuid>/transition/` | `status`, `note`, CSRF bắt buộc |
 
 Các route nghiệp vụ yêu cầu đăng nhập; POST dùng CSRF. Upload thành công chuyển hướng tới trang kết quả, không trả JSON.
+
+## Cấu hình Đăng nhập bằng Google (Google OAuth 2.0)
+
+1. Vào [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials).
+2. Tạo **OAuth 2.0 Client ID**, chọn loại ứng dụng là **Web application**.
+3. Tại mục **Authorized redirect URIs**, thêm URL callback của ứng dụng:
+   - `http://127.0.0.1:8000/auth/google/callback/`
+   - `http://localhost:8000/auth/google/callback/`
+4. Cài đặt biến môi trường trong shell (hoặc thiết lập biến môi trường hệ thống):
+   ```powershell
+   $env:GOOGLE_CLIENT_ID = "your-client-id.apps.googleusercontent.com"
+   $env:GOOGLE_CLIENT_SECRET = "your-client-secret"
+   ```
 
 ## Dữ liệu và vận hành
 

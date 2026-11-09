@@ -13,6 +13,12 @@ from django.views.decorators.http import require_POST
 from .forms import UploadForm
 from .inference import predict
 from .models import Analysis, Alert, AlertHistory
+from .auth_views import (
+    register,
+    google_login,
+    google_callback,
+    logout_view,
+)
 
 def home(request):
     return render(request, 'home.html')
