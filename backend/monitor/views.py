@@ -15,6 +15,7 @@ from django.db.models import Q
 from django.http import FileResponse, Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.urls.exceptions import NoReverseMatch
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 from PIL import Image
@@ -234,11 +235,17 @@ def alerts(request):
         captures_qs = captures_qs.filter(source=selected_source)
 
     screen_captures = list(captures_qs.order_by('-created_at')[:150])
+    try:
+        delete_alerts_url = reverse('delete_alerts')
+    except NoReverseMatch:
+        delete_alerts_url = None
+
     return render(request, 'alerts.html', {
         **context(), 'alerts': items[:100], 'status': status,
         'selected_source': selected_source, 'sources': sources,
         'screen_tabs': screen_tabs,
         'screen_captures': screen_captures,
+        'delete_alerts_url': delete_alerts_url,
         'pending_count': all_items.filter(status=Alert.Status.PENDING).count(),
         'statuses': Alert.Status.choices,
     })

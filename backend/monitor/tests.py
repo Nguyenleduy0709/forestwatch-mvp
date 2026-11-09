@@ -122,7 +122,7 @@ class WorkflowTests(TestCase):
         response = self.client.post(reverse('login'), {
             'username': 'operator', 'password': 'test-pass-123',
         })
-        self.assertRedirects(response, reverse('control_room'))
+        self.assertRedirects(response, reverse('dashboard'))
         for asset in ('css/app.css', 'js/app.js', 'img/forest.jpg'):
             self.assertIsNotNone(finders.find(asset))
 
@@ -162,7 +162,7 @@ class WorkflowTests(TestCase):
             'password': 'safe-password-999',
             'password_confirm': 'safe-password-999',
         })
-        self.assertRedirects(post_res, reverse('control_room'))
+        self.assertRedirects(post_res, reverse('dashboard'))
         user = get_user_model().objects.get(username='ranger_nam')
         self.assertEqual(user.email, 'nam@forestwatch.vn')
         # Check authenticated session
@@ -227,7 +227,7 @@ class WorkflowTests(TestCase):
         with patch('monitor.auth_views.exchange_code_for_tokens', return_value=mock_tokens), \
              patch('monitor.auth_views.fetch_google_user_info', return_value=mock_userinfo):
             res = self.client.get(reverse('google_callback') + '?code=auth-code-xyz&state=valid-test-state')
-            self.assertRedirects(res, reverse('control_room'))
+            self.assertRedirects(res, reverse('dashboard'))
             new_user = get_user_model().objects.get(email='newranger@gmail.com')
             self.assertEqual(new_user.first_name, 'Lam')
             self.assertEqual(new_user.last_name, 'Nguyen')
@@ -242,7 +242,7 @@ class WorkflowTests(TestCase):
         with patch('monitor.auth_views.exchange_code_for_tokens', return_value=mock_tokens), \
              patch('monitor.auth_views.fetch_google_user_info', return_value=mock_userinfo):
             res2 = self.client.get(reverse('google_callback') + '?code=auth-code-xyz&state=second-test-state')
-            self.assertRedirects(res2, reverse('control_room'))
+            self.assertRedirects(res2, reverse('dashboard'))
             self.assertEqual(int(self.client.session['_auth_user_id']), new_user.pk)
 
     def test_google_callback_invalid_state_and_error(self):
