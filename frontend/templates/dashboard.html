@@ -1,10 +1,117 @@
-{% extends 'base.html' %}{% block title %}Trung tâm giám sát — ForestWatch{% endblock %}{% block content %}
-<main class="workspace observation-workspace"><div class="page-heading"><div><span class="eyebrow">TRUNG TÂM GIÁM SÁT</span><h1>Góc nhìn của bạn về rừng.</h1><p>Phân tích ảnh và theo dõi các dấu hiệu cần xác minh.</p></div><span class="mode-badge {% if mode == 'demo' %}demo{% endif %}"><i></i>{% if mode == 'demo' %}MÔ PHỎNG · KHÔNG CHẠY AI{% elif mode == 'fosp' %}FOSP · PHÂN ĐOẠN KHÓI{% else %}YOLO · MODEL THẬT{% endif %}</span></div>
-<div class="observation-stack"><section class="panel observation-card"><div class="panel-heading"><h2>Phân tích hiện trường</h2><span>ẢNH HIỆN TRƯỜNG</span></div>
-<form method="post" action="{% url 'analyze' %}" enctype="multipart/form-data" id="upload-form">{% csrf_token %}
-<label class="dropzone" for="image-input"><span class="upload-symbol">↥</span><strong id="file-label">Chọn một ảnh để bắt đầu</strong><span>JPG, PNG, WebP · tối đa 10 MB</span><img id="upload-preview" alt="Ảnh đã chọn" hidden></label><input required id="image-input" type="file" name="image" accept="image/jpeg,image/png,image/webp">
-<label for="source">Tên nguồn ảnh</label><input id="source" name="source" maxlength="120" required value="{% if mode == 'demo' %}Camera mô phỏng 01{% else %}Ảnh hiện trường{% endif %}">
-{% if mode == 'demo' %}<div class="notice"><strong>Đây là mô phỏng quy trình.</strong><p>Chưa sử dụng model để kết luận ảnh có khói. Tích ô bên dưới để tạo tình huống cảnh báo; bỏ tích để thử tình huống không có phát hiện.</p><label class="checkbox"><input type="checkbox" name="simulate_smoke"> Mô phỏng phát hiện khói</label></div>{% elif mode == 'fosp' %}<div class="notice green">FoSp tô màu cam ở các pixel được nhận diện là khói.</div>{% else %}<div class="notice green">Model sẽ phân tích ảnh thật. Độ tin cậy là điểm của model, không phải xác suất cháy rừng.</div>{% endif %}
-<button class="button full" id="analyze-button">{% if mode == 'demo' %}Chạy tình huống mô phỏng{% else %}Phân tích ảnh{% endif %} ↗</button></form></section>
-<div class="stats"><article><span>Lượt phân tích</span><strong>{{ total }}</strong><small>Ảnh đã lưu của bạn</small></article><article><span>Tổng cảnh báo</span><strong>{{ alert_count }}</strong><small>Bao gồm cả mô phỏng</small></article><article><span>Chờ xác minh</span><strong class="amber">{{ pending }}</strong><small>Cần người vận hành kiểm tra</small></article><article><span>Đã xác nhận</span><strong>{{ confirmed }}</strong><small>Sự kiện đang theo dõi</small></article></div>
-<aside class="panel recent"><div class="panel-heading"><h2>Quan sát gần đây</h2><a href="{% url 'alerts' %}">Cảnh báo ↗</a></div>{% for run in runs %}<a class="run-row" href="{% url 'detail' run.pk %}"><img src="{% url 'evidence' run.pk 'annotated' %}" alt="Kết quả {{ run.source }}"><div><strong>{{ run.source }}</strong><small>{{ run.created_at|date:'d/m H:i' }} · {% if run.mode == 'demo' %}Mô phỏng{% elif run.mode == 'fosp' %}FoSp{% else %}YOLO{% endif %}</small><span class="pill {% if run.detections %}warning{% endif %}">{% if run.detections %}Có dấu hiệu cần xác minh{% else %}Không có phát hiện{% endif %}</span></div><span>↗</span></a>{% empty %}<div class="empty"><span>♧</span><h3>Mọi quan sát bắt đầu từ đây.</h3><p>Tải ảnh đầu tiên. Kết quả và ảnh bằng chứng sẽ xuất hiện ở khu vực này.</p></div>{% endfor %}{% if mode == "demo" %}<div class="tip"><strong>Gợi ý cho buổi demo</strong><p>Thử một ảnh với ô mô phỏng bật, rồi một ảnh với ô này tắt. Mở cảnh báo để thử thao tác xác minh và xem lịch sử.</p></div>{% endif %}</aside></div></main>{% endblock %}
+{% extends 'base.html' %}{% block title %}Phân tích ảnh đơn lẻ — ForestWatch{% endblock %}{% block content %}
+<main class="workspace observation-workspace">
+  <div class="page-heading">
+    <div>
+      <span class="eyebrow">PHÂN TÍCH ẢNH</span>
+      <h1>Phân tích ảnh đơn lẻ</h1>
+      <p>Phân tích ảnh hiện trường và theo dõi các dấu hiệu cảnh báo khói/cháy rừng.</p>
+    </div>
+    <span class="mode-badge {% if mode == 'demo' %}demo{% endif %}">
+      <i></i>{% if mode == 'demo' %}MÔ PHỎNG · KHÔNG CHẠY AI{% elif mode == 'fosp' %}FOSP · PHÂN ĐOẠN KHÓI{% else %}YOLO · MODEL THẬT{% endif %}
+    </span>
+  </div>
+
+  <div class="observation-stack">
+    <section class="panel observation-card">
+      <div class="panel-heading">
+        <h2>Phân tích ảnh hiện trường</h2>
+        <span>CHỌN TỪ MÁY HOẶC LINK / GOOGLE DRIVE</span>
+      </div>
+
+      <form method="post" action="{% url 'analyze' %}" enctype="multipart/form-data" id="upload-form" class="fw-upload-form">
+        {% csrf_token %}
+        <div class="upload-tabs" role="tablist">
+          <button type="button" class="tab-btn active" data-tab="tab-file">📁 Tải từ máy tính</button>
+          <button type="button" class="tab-btn" data-tab="tab-url">🔗 Link ảnh / Google Drive</button>
+        </div>
+
+        <div id="tab-file" class="tab-panel active">
+          <label class="dropzone" for="image-input">
+            <span class="upload-symbol">↥</span>
+            <strong id="file-label">Kéo thả hoặc nhấp để chọn ảnh từ máy</strong>
+            <span>Hỗ trợ JPG, PNG, WebP · tối đa 10 MB</span>
+            <img id="upload-preview" alt="Ảnh đã chọn" hidden>
+          </label>
+          <input id="image-input" type="file" name="image" accept="image/jpeg,image/png,image/webp">
+        </div>
+
+        <div id="tab-url" class="tab-panel">
+          <label for="image-url-input">Dán đường dẫn ảnh hoặc link chia sẻ Google Drive</label>
+          <div class="url-input-wrap">
+            <input id="image-url-input" type="url" name="image_url" placeholder="https://drive.google.com/file/d/... hoặc https://.../image.jpg">
+            <button type="button" class="btn-preview-url" id="btn-preview-url">Xem trước</button>
+          </div>
+          <p class="url-help-text">
+            💡 <strong>Google Drive:</strong> Đảm bảo file được bật quyền <code>Bất kỳ ai có liên kết</code> (Công khai).<br>
+            💡 <strong>Direct URL:</strong> Hỗ trợ link ảnh trực tiếp từ Internet (HTTPS/HTTP).
+          </p>
+          <div class="url-preview-box" id="url-preview-box">
+            <img id="url-preview-img" alt="Xem trước link ảnh" hidden>
+            <span id="url-preview-placeholder">Ảnh xem trước từ liên kết sẽ hiển thị tại đây</span>
+          </div>
+        </div>
+
+        <label for="source">Tên nguồn ảnh</label>
+        <input id="source" name="source" maxlength="120" required value="{% if mode == 'demo' %}Camera mô phỏng 01{% else %}Ảnh hiện trường{% endif %}">
+
+        {% if mode == 'demo' %}
+          <div class="notice">
+            <strong>Mô phỏng quy trình (Demo mode)</strong>
+            <p>Hệ thống hỗ trợ tạo tình huống khói để kiểm thử luồng cảnh báo:</p>
+            <div class="checkbox-group">
+              <label class="checkbox"><input type="checkbox" name="simulate_smoke" checked> Mô phỏng phát hiện khói</label>
+            </div>
+          </div>
+        {% elif mode == 'fosp' %}
+          <div class="notice green">FoSp ({{ model_name }}) đánh dấu vùng nghi có khói trên ảnh hiện trường.</div>
+        {% else %}
+          <div class="notice green">Mô hình đánh dấu vùng nghi có khói trên ảnh hiện trường.</div>
+        {% endif %}
+
+        <button class="button full" id="analyze-button">
+          {% if mode == 'demo' %}Chạy phân tích mô phỏng{% else %}Phân tích ảnh ngay{% endif %} ↗
+        </button>
+      </form>
+    </section>
+
+    <div class="stats">
+      <article><span>Lượt phân tích</span><strong>{{ total }}</strong><small>Ảnh đã lưu của bạn</small></article>
+      <article><span>Tổng cảnh báo</span><strong>{{ alert_count }}</strong><small>Bao gồm cả mô phỏng</small></article>
+      <article><span>Chờ xác minh</span><strong class="amber">{{ pending }}</strong><small>Cần người vận hành kiểm tra</small></article>
+      <article><span>Đã xác nhận</span><strong>{{ confirmed }}</strong><small>Sự kiện đang theo dõi</small></article>
+    </div>
+
+    <aside class="panel recent">
+      <div class="panel-heading">
+        <h2>Quan sát gần đây</h2>
+        <a href="{% url 'alerts' %}">Cảnh báo ↗</a>
+      </div>
+      {% for run in runs %}
+        <a class="run-row" href="{% url 'detail' run.pk %}">
+          <img src="{% url 'evidence' run.pk 'annotated' %}" alt="Kết quả {{ run.source }}">
+          <div>
+            <strong>{{ run.source }}</strong>
+            <small>{{ run.created_at|date:'d/m H:i' }} · {% if run.mode == 'demo' %}Mô phỏng{% elif run.mode == 'fosp' %}FoSp{% else %}YOLO{% endif %}</small>
+            <span class="pill {% if run.detections %}warning{% endif %}">
+              {% if run.detections %}Có dấu hiệu cần xác minh{% else %}Không có phát hiện{% endif %}
+            </span>
+          </div>
+          <span>↗</span>
+        </a>
+      {% empty %}
+        <div class="empty">
+          <span>♧</span>
+          <h3>Mọi quan sát bắt đầu từ đây.</h3>
+          <p>Tải ảnh đầu tiên qua máy tính hoặc Google Drive để bắt đầu giám sát.</p>
+        </div>
+      {% endfor %}
+      {% if mode == "demo" %}
+        <div class="tip">
+          <strong>Gợi ý kiểm thử</strong>
+          <p>Thử tải ảnh từ máy tính hoặc dán link Google Drive để phân tích khói rừng.</p>
+        </div>
+      {% endif %}
+    </aside>
+  </div>
+</main>
+{% endblock %}

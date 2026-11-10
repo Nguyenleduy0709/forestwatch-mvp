@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 def register(request):
     """User registration view with username, email, and password."""
     if request.user.is_authenticated:
-        return redirect('dashboard')
+        return redirect(settings.LOGIN_REDIRECT_URL)
 
     if request.method == 'POST':
         form = RegisterForm(request.POST)
@@ -38,7 +38,7 @@ def register(request):
                 request,
                 f'Đăng ký tài khoản thành công! Chào mừng {user.username} đến với ForestWatch.'
             )
-            return redirect('dashboard')
+            return redirect(settings.LOGIN_REDIRECT_URL)
     else:
         form = RegisterForm()
 

@@ -16,3 +16,41 @@
 .auth-footer a{color:var(--forest);font-weight:600;text-decoration:underline;text-underline-offset:3px}
 .auth-card-wide{max-width:520px}
 ul.errorlist{list-style:none;padding:8px 14px;margin:6px 0 12px;border-radius:4px;font-size:11px;background:#fff1d9;color:#88551e}
+
+/* Navigation & Quick actions */
+.breadcrumb-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
+.breadcrumb-bar .back{margin-bottom:0}
+.quick-jump-btn{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:var(--forest);background:#edf3e6;padding:6px 12px;border-radius:20px;transition:background .15s}
+.quick-jump-btn:hover{background:#dfead3}
+
+/* Upload tabs & Link / Google Drive input */
+.upload-tabs{display:flex;gap:6px;background:#eef3e8;padding:4px;border-radius:7px;margin-bottom:16px}
+.upload-tabs .tab-btn{flex:1;border:0;background:transparent;padding:10px 14px;font-size:12px;font-weight:600;color:var(--muted);border-radius:5px;cursor:pointer;transition:all .18s ease;display:flex;align-items:center;justify-content:center;gap:6px}
+.upload-tabs .tab-btn.active{background:#fff;color:var(--forest);box-shadow:0 1px 4px rgba(0,0,0,.08)}
+.tab-panel{display:none}
+.tab-panel.active{display:block}
+
+.url-input-wrap{position:relative;margin:6px 0 10px}
+.url-input-wrap input{padding-right:95px}
+.btn-preview-url{position:absolute;right:4px;top:4px;bottom:4px;background:var(--forest);color:#fff;border:0;border-radius:4px;padding:0 12px;font-size:11px;font-weight:600;cursor:pointer;transition:background .15s}
+.btn-preview-url:hover{background:#235841}
+.url-help-text{font-size:11px;color:var(--muted);margin:6px 0 14px;line-height:1.6}
+.url-help-text code{background:#e8eee2;padding:2px 5px;border-radius:3px;font-size:10px;color:var(--forest)}
+
+.url-preview-box{border:1px dashed #b5c7ad;background:#f7f9f3;border-radius:6px;padding:12px;text-align:center;min-height:130px;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-bottom:16px}
+.url-preview-box img{max-width:100%;max-height:240px;object-fit:contain;border-radius:4px}
+.url-preview-box span{font-size:11px;color:var(--muted)}
+
+.checkbox-group{display:flex;flex-wrap:wrap;gap:18px;margin-top:10px}
+.checkbox-group label{display:inline-flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;margin:0!important}
+
+/* Side by side comparison in observation detail view */
+.side-by-side-wrap{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px}
+.side-by-side-wrap figure{margin:0;text-align:center}
+.side-by-side-wrap figure img{width:100%;max-height:460px;object-fit:contain;border-radius:6px;background:#102c23;display:block}
+.side-by-side-wrap figcaption{font-size:11px;color:var(--muted);margin-top:7px;font-weight:600}
+
+.text-fire{color:#d32f2f!important}
+.quick-upload-panel{margin-top:10px}
+
+.header nav a[aria-current="page"]{color:#22664b;font-weight:700}
