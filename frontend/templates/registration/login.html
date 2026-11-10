@@ -1,42 +1,60 @@
 {% extends 'base.html' %}
 {% block title %}Đăng nhập — ForestWatch{% endblock %}
+
 {% block content %}
 <main class="login-layout">
-<div class="login-visual">
-<span class="eyebrow light">FORESTWATCH / CONTROL ROOM</span>
-<h1>Chào một ngày<br><em>rừng vẫn xanh.</em></h1>
-</div>
-<section class="login-card">
-<span class="eyebrow">KHÔNG GIAN GIÁM SÁT</span>
-<h2>Đăng nhập</h2>
-<p>Chọn phương thức đăng nhập để truy cập hệ thống giám sát và cảnh báo sớm khói rừng.</p>
+  <div class="login-visual">
+    <span class="eyebrow light"><i></i> FORESTWATCH / COMMAND CENTER</span>
+    <h1>Chào một ngày<br><em>rừng vẫn xanh.</em></h1>
+    <p style="margin-top: 16px; font-size: 14px; max-width: 440px;">Hệ thống giám sát đa màn hình tích hợp trí tuệ nhân tạo, giúp phát hiện sớm dấu hiệu khói và đối chiếu bằng chứng hiện trường tức thì.</p>
+    
+    <div style="margin-top: 36px; display: flex; flex-direction: column; gap: 12px; font-size: 12px;">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span style="color:var(--forest-light); font-family:var(--font-mono); font-weight:700;">[01]</span>
+        <span>Phát hiện & khoanh vùng khói tự động trên luồng CCTV</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span style="color:var(--forest-light); font-family:var(--font-mono); font-weight:700;">[02]</span>
+        <span>Chia sẻ camera điện thoại nhanh qua mã QR mạng nội bộ</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span style="color:var(--forest-light); font-family:var(--font-mono); font-weight:700;">[03]</span>
+        <span>Quản lý & lưu trữ bằng chứng riêng theo từng màn hình giám sát</span>
+      </div>
+    </div>
+  </div>
 
-<a href="{% url 'google_login' %}{% if next %}?next={{ next|urlencode }}{% endif %}" class="button-google">
-  <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-    <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z"/>
-    <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z"/>
-    <path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957C.347 6.175 0 7.55 0 9s.347 2.825.957 4.039l3.007-2.332z"/>
-    <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/>
-  </svg>
-  <span>Đăng nhập với tài khoản Google</span>
-</a>
+  <section class="login-card">
+    <span class="eyebrow">KHÔNG GIAN TRUY CẬP</span>
+    <h2>Đăng nhập</h2>
+    <p>Chọn phương thức đăng nhập để truy cập hệ thống giám sát và cảnh báo sớm khói rừng.</p>
 
-<div class="auth-divider">hoặc tài khoản hệ thống</div>
+    <a href="{% url 'google_login' %}{% if next %}?next={{ next|urlencode }}{% endif %}" class="button-google" id="google-login-btn">
+      <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z"/>
+        <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z"/>
+        <path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957C.347 6.175 0 7.55 0 9s.347 2.825.957 4.039l3.007-2.332z"/>
+        <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/>
+      </svg>
+      <span>Đăng nhập với tài khoản Google</span>
+    </a>
 
-<form method="post">
-{% csrf_token %}
-{{ form.non_field_errors }}
-<label for="id_username">Tên đăng nhập</label>
-{{ form.username }}
-<label for="id_password">Mật khẩu</label>
-{{ form.password }}
-{% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
-<button class="button full">Tiếp tục vào hệ thống ↗</button>
-</form>
+    <div class="auth-divider">hoặc tài khoản quản trị</div>
 
-<div class="auth-footer">
-Chưa có tài khoản? <a href="{% url 'register' %}">Đăng ký ngay ↗</a>
-</div>
-</section>
+    <form method="post" id="login-form">
+      {% csrf_token %}
+      {{ form.non_field_errors }}
+      <label for="id_username">Tên đăng nhập</label>
+      {{ form.username }}
+      <label for="id_password">Mật khẩu</label>
+      {{ form.password }}
+      {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+      <button type="submit" class="button full">Tiếp tục vào hệ thống ↗</button>
+    </form>
+
+    <div class="auth-footer">
+      Chưa có tài khoản? <a href="{% url 'register' %}">Đăng ký tài khoản mới ↗</a>
+    </div>
+  </section>
 </main>
 {% endblock %}

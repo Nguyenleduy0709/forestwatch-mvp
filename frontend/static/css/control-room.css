@@ -225,18 +225,24 @@
 .cctv-tip p { margin: 4px 0 0; }
 
 .cctv-dialog {
-  width: min(480px, calc(100% - 24px));
+  width: min(520px, calc(100% - 24px));
   max-height: calc(100% - 24px);
   padding: 0;
-  border: 1px solid var(--cctv-line);
-  border-radius: 12px;
-  background: var(--cctv-panel);
+  border: 1px solid var(--cctv-line-bright);
+  border-radius: 14px;
+  background: rgba(17, 24, 21, 0.95);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   color: var(--cctv-text);
   color-scheme: dark;
-  box-shadow: 0 20px 80px #0007;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.75), 0 0 1px 1px rgba(255, 255, 255, 0.08);
 }
 
-.cctv-dialog::backdrop { background: #050a07bf; }
+.cctv-dialog::backdrop {
+  background: rgba(4, 8, 6, 0.82);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
 .cctv-dialog header, .cctv-dialog footer { display: flex; flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; padding: 15px 19px; }
 .cctv-dialog header { border-bottom: 1px solid var(--cctv-line); }
 .cctv-dialog footer { border-top: 1px solid var(--cctv-line); justify-content: end; }
@@ -342,11 +348,16 @@
 }
 .cctv-alert-card {
   position: relative;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: transform 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease;
+}
+.cctv-alert-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--cctv-line-bright);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45), 0 0 12px rgba(16, 185, 129, 0.08);
 }
 .cctv-alert-card.is-selected {
   border-color: var(--cctv-green);
-  box-shadow: 0 0 0 1px var(--cctv-green);
+  box-shadow: 0 0 0 1px var(--cctv-green), 0 0 16px var(--cctv-green-glow);
 }
 .cctv-alert-top {
   position: relative;
@@ -896,20 +907,27 @@ input.cctv-custom-check[type="checkbox"]:indeterminate::before {
 
 .cctv-evidence-page .panel, .cctv-evidence-page .observation-metrics > div { background: var(--cctv-panel); }
 .cctv-evidence-page .panel, .cctv-evidence-page .observation-metrics { border-color: var(--cctv-line); }
-.cctv-evidence-page .observation-metrics { background: var(--cctv-line); }
+.cctv-evidence-page .observation-metrics { background: transparent; }
 .cctv-evidence-page .observation-metrics span, .cctv-evidence-page .back,
 .cctv-evidence-page .page-heading p, .cctv-evidence-page .panel p,
 .cctv-evidence-page .detection-list span, .cctv-evidence-page .timeline small { color: var(--cctv-muted); }
 .cctv-evidence-page .eyebrow { color: var(--cctv-green); }
-.cctv-evidence-page .mode-badge { color: #152718; }
-.cctv-evidence-page .segmented { background: #23332a; }
-.cctv-evidence-page .segmented button { color: var(--cctv-text); }
-.cctv-evidence-page .segmented .selected { background: #b8eb91; color: #152718; }
+.cctv-evidence-page .mode-badge { color: var(--cctv-green); background: rgba(55, 200, 122, 0.14); border: 1px solid rgba(55, 200, 122, 0.35); }
+.cctv-evidence-page .mode-badge.demo { color: var(--cctv-amber); background: rgba(244, 178, 60, 0.14); border-color: rgba(244, 178, 60, 0.35); }
+.cctv-evidence-page .segmented { background: #0c1410; border: 1px solid var(--cctv-line); }
+.cctv-evidence-page .segmented button { color: var(--cctv-muted); }
+.cctv-evidence-page .segmented button:hover { color: #ffffff; }
+.cctv-evidence-page .segmented .selected { background: var(--cctv-panel-alt); color: var(--cctv-green); border: 1px solid var(--cctv-line-bright); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4); }
 .cctv-evidence-page select, .cctv-evidence-page textarea,
 .cctv-evidence-page input:not([type="file"]):not([type="checkbox"]) {
   background: #111a15;
   color: var(--cctv-text);
   border-color: var(--cctv-line);
+}
+.cctv-evidence-page select:focus, .cctv-evidence-page textarea:focus,
+.cctv-evidence-page input:not([type="file"]):not([type="checkbox"]):focus {
+  border-color: var(--cctv-green);
+  box-shadow: 0 0 0 2px rgba(55, 200, 122, 0.25);
 }
 .cctv-evidence-page .button.secondary { color: var(--cctv-text); border-color: var(--cctv-line); }
 .cctv-evidence-page .dropzone, .cctv-evidence-page .upload-tabs,
