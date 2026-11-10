@@ -183,3 +183,34 @@ class RegisterForm(forms.Form):
             except ValidationError as exc:
                 self.add_error('password', exc)
         return cleaned_data
+
+
+class SetPasswordForGoogleForm(forms.Form):
+    password = forms.CharField(
+        label='Mật khẩu mới',
+        widget=forms.PasswordInput(attrs={
+            'placeholder': 'Tối thiểu 8 ký tự',
+            'autocomplete': 'new-password',
+            'autofocus': True,
+        }),
+    )
+    password_confirm = forms.CharField(
+        label='Xác nhận mật khẩu',
+        widget=forms.PasswordInput(attrs={
+            'placeholder': 'Nhập lại mật khẩu mới',
+            'autocomplete': 'new-password',
+        }),
+    )
+
+    def clean(self):
+        cleaned_data = super().clean()
+        password = cleaned_data.get('password')
+        password_confirm = cleaned_data.get('password_confirm')
+        if password and password_confirm and password != password_confirm:
+            self.add_error('password_confirm', 'Mật khẩu xác nhận không khớp.')
+        if password:
+            try:
+                validate_password(password)
+            except ValidationError as exc:
+                self.add_error('password', exc)
+        return cleaned_data
