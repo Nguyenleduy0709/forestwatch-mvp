@@ -167,10 +167,10 @@
           <textarea id="note" name="note" rows="3" maxlength="500" placeholder="Ghi nhận xét của người giám sát tại hiện trường…"></textarea>
           <div class="actions">
             {% if run.alert.status == 'PENDING' %}
-              <button class="button" name="status" value="CONFIRMED">Xác nhận có khói</button>
-              <button class="button secondary" name="status" value="REJECTED">Từ chối (Báo động giả)</button>
+              <button class="button btn-confirm-alert" name="status" value="CONFIRMED">🔥 Xác nhận có khói</button>
+              <button class="button secondary btn-reject-alert" name="status" value="REJECTED">🛡️ Từ chối (Báo động giả)</button>
             {% elif run.alert.status == 'CONFIRMED' %}
-              <button class="button" name="status" value="RESOLVED">Đánh dấu đã xử lý xong</button>
+              <button class="button btn-resolve-alert" name="status" value="RESOLVED">✅ Đánh dấu đã xử lý xong</button>
             {% else %}
               <p>Sự kiện đã đóng, lịch sử được lưu trữ vĩnh viễn.</p>
             {% endif %}
