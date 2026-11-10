@@ -17,7 +17,7 @@
       <p>{{ run.created_at|date:'d/m/Y H:i:s' }} · {{ run.elapsed_ms }} ms thời gian phân tích</p>
     </div>
     <span class="mode-badge {% if run.mode == 'demo' %}demo{% endif %}">
-      {% if run.mode == 'demo' %}KẾT QUẢ MÔ PHỎNG{% elif run.mode == 'fosp' %}FOSP{% if run.model_name %} · {{ run.model_name }}{% endif %}{% else %}{{ run.model_name|default:'YOLO' }}{% endif %}
+      {% if run.mode == 'demo' %}KẾT QUẢ MÔ PHỎNG{% elif run.mode == 'fosp' %}PHÂN ĐOẠN KHÓI AI{% else %}NHẬN DIỆN KHÓI AI{% endif %}
     </span>
   </div>
 

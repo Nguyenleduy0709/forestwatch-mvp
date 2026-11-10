@@ -27,7 +27,6 @@
 
   <section class="cctv-stats" aria-label="Tổng quan giám sát">
     <div><span>Nguồn giám sát</span><strong id="cctv-count">0 / 10</strong></div>
-    <div class="cctv-model-stat"><span>Mô hình nhận diện{% if reference_enabled %} · thử nghiệm{% endif %}</span><strong>{% if mode == 'fosp' %}{{ model_name }}{% else %}{{ mode|upper }}{% endif %}</strong></div>
     <div><span>Quét tự động</span><strong class="cctv-accent" id="cctv-auto-state">Đang bật</strong></div>
     <a class="cctv-stat-link" href="{% url 'alerts' %}?status=PENDING"><span>Chờ xác minh ↗</span><strong id="cctv-incident-count">{{ pending_count }}</strong></a>
   </section>
