@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory(dir=root / 'work/checks') as scratch:
                 data['csrfmiddlewaretoken'] = csrf()
                 request = urllib.request.Request(base + path, data=urllib.parse.urlencode(data).encode())
                 return opener.open(request, timeout=20)
-            assert post('/login/', {'username':'http-check', 'password':password}).url.endswith('/dashboard/')
+            assert post('/login/', {'username':'http-check', 'password':password}).url.endswith('/control-room/')
             image = io.BytesIO()
             Image.new('RGB', (200, 100), '#316c3c').save(image, 'PNG')
             def upload(smoke):
