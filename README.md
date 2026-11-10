@@ -59,6 +59,16 @@ $env:INFERENCE_MODE = 'demo'
 .\.venv\Scripts\python.exe backend/manage.py runserver 127.0.0.1:8000
 ```
 
+### Chạy nhanh bằng Docker (Khuyên dùng khi demo / chấm bài)
+
+Nếu máy đã cài **Docker Desktop**, bạn có thể khởi chạy toàn bộ hệ thống bằng đúng 1 câu lệnh mà không cần cài đặt Python hay thư viện thủ công:
+
+```bash
+docker compose up --build
+```
+
+Mở trình duyệt tại `http://localhost:8000/`. Toàn bộ dữ liệu database SQLite, ảnh chụp bằng chứng và checkpoint model AI được mount qua Volume nên không bị mất khi khởi động lại.
+
 Mở http://127.0.0.1:8000, đăng nhập bằng tài khoản vừa tạo. Không có tài khoản/mật khẩu mặc định. SQLite mặc định tại `backend/db.sqlite3`, ảnh tại `backend/media/`; không đưa vào Git. Nếu muốn dùng database cũ trên máy này, đặt đường dẫn **trước migrate và chạy web**:
 
 ```powershell
