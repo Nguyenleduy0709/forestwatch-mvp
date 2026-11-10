@@ -1,0 +1,26 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: forestwatch-web
+    ports:
+      - "8000:8000"
+    environment:
+      - DJANGO_DEBUG=1
+      - DJANGO_ALLOWED_HOSTS=*
+      - INFERENCE_MODE=fosp
+      - FOSP_MODEL_PATH=/app/best.pth
+      - FOSP_RUNTIME_DIR=/app/.fosp-runtime
+      - TIME_ZONE=Asia/Ho_Chi_Minh
+      - LOGIN_REDIRECT_URL=dashboard
+    volumes:
+      # Mount SQLite database so user accounts and alerts persist across container restarts
+      - ./backend/db.sqlite3:/app/backend/db.sqlite3
+      # Mount uploaded media and smoke captures
+      - ./backend/media:/app/backend/media
+      # Mount model checkpoint directly
+      - ./best.pth:/app/best.pth:ro
+      # Mount fosp runtime library
+      - ./.fosp-runtime:/app/.fosp-runtime:ro
+    restart: unless-stopped
