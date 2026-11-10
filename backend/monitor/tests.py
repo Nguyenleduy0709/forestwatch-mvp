@@ -1,5 +1,8 @@
+import base64
 import io
+import json
 import tempfile
+from types import ModuleType
 from unittest.mock import patch
 from PIL import Image
 from django.contrib.auth import get_user_model
@@ -125,7 +128,7 @@ class WorkflowTests(TestCase):
 
     def test_fosp_dispatch_preserves_mask_evidence_and_alert(self):
         overlay = Image.new('RGB', (200, 100), '#ffa52d')
-        detections = [{'label': 'smoke', 'mask_coverage': 12.5}]
+        detections = [{'label': 'smoke', 'mask_coverage': 12.5, 'confidence': 0.8}]
         with override_settings(INFERENCE_MODE='fosp'), patch(
             'monitor.fosp.predict_fosp', return_value=(detections, overlay)
         ):
@@ -260,3 +263,125 @@ class WorkflowTests(TestCase):
         res = self.client.post(reverse('logout'))
         self.assertRedirects(res, reverse('home'))
         self.assertNotIn('_auth_user_id', self.client.session)
+
+    def test_upload_via_image_url(self):
+        buf = io.BytesIO()
+        Image.new('RGB', (160, 120), '#2d7a42').save(buf, 'JPEG')
+        sample_bytes = buf.getvalue()
+
+        with patch('monitor.forms.fetch_image_from_url', return_value=sample_bytes):
+            res = self.client.post(reverse('analyze'), {
+                'image_url': 'https://drive.google.com/file/d/test12345/view?usp=sharing',
+                'source': 'Drive Camera',
+                'simulate_smoke': 'on',
+            })
+            self.assertEqual(res.status_code, 302)
+            run = Analysis.objects.filter(source='Drive Camera').first()
+            self.assertIsNotNone(run)
+            labels = [d['label'] for d in run.detections]
+            self.assertIn('smoke', labels)
+
+    def test_detail_view_includes_quick_upload_form(self):
+        self.upload()
+        run = Analysis.objects.first()
+        res = self.client.get(reverse('detail', args=[run.pk]))
+        self.assertEqual(res.status_code, 200)
+        self.assertIn('quick-upload-form', res.content.decode('utf-8'))
+        self.assertIn('split-image-view', res.content.decode('utf-8'))
+
+    def test_control_room_view(self):
+        res = self.client.get(reverse('control_room'))
+        self.assertEqual(res.status_code, 200)
+        self.assertIn('cctv-control-center', res.content.decode('utf-8'))
+        self.assertIn('cctv-camera-grid', res.content.decode('utf-8'))
+
+    def test_scan_frame_api(self):
+        buf = io.BytesIO()
+        Image.new('RGB', (160, 120), '#316c3c').save(buf, 'JPEG')
+        b64 = 'data:image/jpeg;base64,' + base64.b64encode(buf.getvalue()).decode('utf-8')
+
+        res = self.client.post(reverse('scan_frame'), {
+            'image_b64': b64,
+            'source': 'CAM 01 - Trạm Cột 1',
+            'simulate_smoke': '1',
+            'save_alert': '1',
+        })
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data['status'], 'success')
+        self.assertTrue(data['has_smoke'])
+        self.assertTrue(data['alert'])
+        self.assertIsNotNone(data['alert_id'])
+
+    def test_extract_youtube_video_id(self):
+        from monitor.forms import extract_youtube_video_id
+        self.assertEqual(extract_youtube_video_id('https://www.youtube.com/watch?v=dQw4w9WgXcQ'), 'dQw4w9WgXcQ')
+        self.assertEqual(extract_youtube_video_id('https://youtu.be/dQw4w9WgXcQ'), 'dQw4w9WgXcQ')
+        self.assertEqual(extract_youtube_video_id('https://www.youtube.com/shorts/dQw4w9WgXcQ'), 'dQw4w9WgXcQ')
+        self.assertEqual(extract_youtube_video_id('https://www.youtube.com/embed/dQw4w9WgXcQ'), 'dQw4w9WgXcQ')
+        self.assertEqual(extract_youtube_video_id('https://www.youtube.com/live/dQw4w9WgXcQ'), 'dQw4w9WgXcQ')
+        self.assertIsNone(extract_youtube_video_id('https://google.com/test'))
+
+    def test_scan_frame_api_with_image_url(self):
+        buf = io.BytesIO()
+        Image.new('RGB', (160, 120), '#316c3c').save(buf, 'JPEG')
+        sample_bytes = buf.getvalue()
+
+        with patch('monitor.views.fetch_image_from_url', return_value=sample_bytes):
+            res = self.client.post(reverse('scan_frame'), {
+                'image_url': 'https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg',
+                'source': 'CAM 02 - YouTube Stream',
+                'simulate_smoke': '1',
+                'save_alert': '1',
+            })
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            self.assertEqual(data['status'], 'success')
+            self.assertTrue(data['has_smoke'])
+            self.assertTrue(data['alert'])
+
+    def test_alert_list_renders_if_delete_route_is_unavailable(self):
+        from forestwatch.urls import urlpatterns
+
+        self.upload()
+        urlconf = ModuleType('alerts_without_delete')
+        urlconf.urlpatterns = [route for route in urlpatterns if getattr(route, 'name', None) != 'delete_alerts']
+        with self.settings(ROOT_URLCONF=urlconf):
+            response = self.client.get('/alerts/')
+        self.assertContains(response, 'Camera 01')
+        self.assertNotContains(response, 'id="batch-delete-form"')
+
+    def test_delete_selected_alerts(self):
+        # Create 2 alerts for user
+        self.upload()
+        alert1 = Alert.objects.get()
+        self.upload()
+        alert2 = Alert.objects.exclude(pk=alert1.pk).get()
+        self.assertEqual(Alert.objects.count(), 2)
+
+        # Delete alert1 via POST alert_ids
+        res = self.client.post(reverse('delete_alerts'), {'alert_ids': [str(alert1.pk)]})
+        self.assertEqual(res.status_code, 302)
+        self.assertEqual(Alert.objects.count(), 1)
+        self.assertFalse(Alert.objects.filter(pk=alert1.pk).exists())
+        self.assertTrue(Alert.objects.filter(pk=alert2.pk).exists())
+
+    def test_delete_single_alert_json(self):
+        self.upload()
+        alert = Alert.objects.get()
+        res = self.client.post(reverse('delete_alerts'),
+                               json.dumps({'alert_id': str(alert.pk)}),
+                               content_type='application/json')
+        self.assertEqual(res.status_code, 200)
+        self.assertTrue(res.json()['success'])
+        self.assertEqual(res.json()['deleted_count'], 1)
+        self.assertEqual(Alert.objects.count(), 0)
+
+    def test_cannot_delete_other_user_alert(self):
+        self.upload()
+        alert = Alert.objects.get()
+        self.client.force_login(self.other)
+        res = self.client.post(reverse('delete_alerts'), {'alert_ids': [str(alert.pk)]})
+        self.assertEqual(res.status_code, 302)
+        # Alert should still exist because it belongs to self.user, not self.other
+        self.assertEqual(Alert.objects.count(), 1)

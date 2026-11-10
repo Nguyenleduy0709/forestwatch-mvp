@@ -1,8 +1,6 @@
 # ForestWatch
 
-Ứng dụng Django giám sát ảnh rừng: đăng nhập, dashboard, tải ảnh, phân đoạn khói bằng FoSp, xem ảnh gốc/mặt nạ và xác minh cảnh báo. Frontend dùng Django templates, CSS và TypeScript; một server Django phục vụ toàn bộ web, chưa có SPA hay API riêng.
-
-MVP xử lý **ảnh tĩnh, đồng bộ từng yêu cầu**. Chưa có camera trực tiếp, video, bản đồ hay thông báo thời gian thực. Demo mô phỏng do người dùng chọn, không chạy AI. Kết quả model cần người xác minh, không phải kết luận hiện trường an toàn hoặc có cháy. Không dùng `runserver` để triển khai công khai.
+ForestWatch dùng Django, TypeScript và FoSp để giám sát hình ảnh rừng, lưu bằng chứng và xác minh cảnh báo khói. Phòng CCTV hiển thị tối đa 10 nguồn và lấy mẫu khung hình khi video đang phát.
 
 ![Giao diện](docs/home.jpg)
 
@@ -17,7 +15,7 @@ D:\ForestWatch\
 │   └── manage.py
 ├── frontend/
 │   ├── templates/           HTML được Django render
-│   ├── src/app.ts           TypeScript nguồn
+│   ├── src/                 TypeScript nguồn
 │   └── static/              CSS, ảnh và JS đã build
 ├── notebooks/               Notebook/script tiếp tục train FoSp
 ├── research/                Thử nghiệm nghiên cứu, web chưa dùng
@@ -50,7 +48,7 @@ python -m venv .venv
 
 Trên máy đã có repo ở `D:\ForestWatch`, chỉ `Set-Location` vào đó, **không clone chồng lên dữ liệu**. Có thể dùng môi trường sẵn có `D:\ForestWatch\work\venv\Scripts\python.exe` thay `.\.venv\Scripts\python.exe` trong mọi lệnh bên dưới.
 
-Xem [`.env.example`](.env.example) để biết biến hỗ trợ. Có thể sao chép thành `.env` làm ghi chú riêng, nhưng ứng dụng **không tự nạp `.env`**: đặt biến trong cùng cửa sổ PowerShell trước khi chạy. Không commit `.env` hoặc secret.
+Ứng dụng đọc `.env` ở thư mục gốc. Biến đặt trong PowerShell được ưu tiên. Danh sách biến có trong [`.env.example`](.env.example).
 
 ```powershell
 $env:DJANGO_DEBUG = '1'
@@ -72,6 +70,36 @@ Database cũ lưu đường dẫn ảnh tương đối với media cũ. Để d�
 ```powershell
 $env:MEDIA_ROOT = 'D:\ForestWatch\outputs\forestwatch-mvp\backend\media'
 ```
+
+### Phòng giám sát CCTV
+
+Sau khi đăng nhập, mở **Phòng giám sát** ở `/control-room/`. Chọn **Thêm nguồn** để mở ảnh JPG/PNG/WebP, tệp video MP4/WebM, webcam hoặc liên kết video công khai. Với YouTube, cài thêm công cụ tách luồng và đặt Node.js hoặc Deno trong PATH của máy chủ.
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -U -r backend/requirements-video.txt
+```
+
+YouTube cần cung cấp luồng HTTP phát được trên trình duyệt. Video riêng tư, nguồn yêu cầu đăng nhập, playlist HLS và trang web chỉ nhúng trình phát có thể cần tệp video tải sẵn hoặc liên kết tệp trực tiếp.
+
+### Camera điện thoại
+
+Cho điện thoại và máy chạy ForestWatch vào cùng Wi-Fi. Bật ứng dụng camera IP có ảnh chụp JPEG, ví dụ IP Webcam trên Android. Trong **Thêm nguồn**, chọn **Camera điện thoại qua Wi-Fi** và nhập địa chỉ ứng dụng hiển thị, ví dụ `http://192.168.1.20:8080`. ForestWatch lấy ảnh từ `/shot.jpg` theo mặc định và cũng nhận `/snapshot.jpg` hoặc `/snapshot.jpeg`. Chọn độ phân giải 1280×720 nếu cần giảm dung lượng khung hình.
+
+Đặt `PHONE_CAMERA_NETWORKS` trong `.env` thành dải mạng riêng của Wi-Fi, ví dụ `192.168.1.0/24`, rồi khởi động lại Django. ForestWatch dùng địa chỉ camera để lấy hình từ máy chủ, vì vậy trang giám sát trên máy tính vẫn có thể mở qua localhost. Với điện thoại đã xuất hiện như một webcam hệ thống, chọn **Webcam hoặc camera USB**, bấm **Lấy danh sách camera** và chọn thiết bị.
+
+### Checkpoint E3 concat
+
+Đặt `FOSP_MODEL_PATH` trong `.env` trỏ đến `E3_concat_best.pth`. E3 dùng bộ nạp nghiêm ngặt và ngưỡng từ checkpoint. Với camera cố định, chọn một khung chưa có khói rồi bấm **Lưu khung nền** trên ô giám sát. E3 dùng khung nền tham chiếu cho nguồn đó. Khi camera đổi hướng, chọn **Đổi khung nền** hoặc **Bỏ nền**. E3 cũng quét được ảnh và video chưa có khung nền.
+
+### Nguồn đã lưu và bằng chứng
+
+Nguồn được lưu theo tài khoản trong bộ nhớ của trình duyệt hiện tại, kể cả ảnh và video chọn từ máy. Tải lại trang để tự mở các nguồn đã lưu và tiếp tục video từ vị trí gần nhất. Webcam tiếp tục cần quyền camera, còn nguồn qua mạng sẽ xin lại liên kết phát. Đóng một cửa sổ sẽ xóa nguồn đó khỏi danh sách đã lưu.
+
+Quét tự động hoạt động trong trang giám sát đang mở. Ảnh được quét một lần, còn webcam được lấy mẫu luân phiên. Với video từ máy và liên kết video, bấm **Bắt đầu quét** trên từng ô để phát và quét, kể cả sau khi tải lại trang. Tạm dừng quét tự động cũng dừng các video đang phát. Sau khi bắt đầu, chọn tốc độ phát chậm hoặc bấm **Quét ngay** để kiểm tra khung hình đang dừng.
+
+Khi vùng khói có điểm nhận diện từ 40%, hệ thống lưu bằng chứng và đưa sự kiện vào nhật ký. Điểm nhận diện tách biệt với tỷ lệ diện tích vùng khói. Có thể bật chuông trong trang và cho phép thông báo của trình duyệt khi chuyển tab. Một đợt video kết thúc sau ba mẫu đang phát liên tiếp không đạt ngưỡng lưu, hoặc khi không ghi nhận thêm khói đủ ngưỡng trong năm phút trước lần quét kế tiếp. Mỗi sự kiện giữ ảnh gốc và ảnh đánh dấu của khung đầu đạt ngưỡng, cùng một khung bổ sung nếu vùng khói lớn hơn. Mục **Cảnh báo** cho phép tải ảnh và xác minh sự kiện.
+
+Khi nâng cấp từ bản trước, chạy `python backend/manage.py migrate` để cập nhật bảng lưu sự kiện và tên checkpoint trong bằng chứng.
 
 ### Chế độ demo
 
@@ -110,7 +138,7 @@ $env:FOSP_RUNTIME_DIR = 'D:\ForestWatch\.fosp-runtime'
 .\.venv\Scripts\python.exe backend/manage.py runserver 127.0.0.1:8000 --noreload
 ```
 
-Đặt checkpoint `best.pth` đáng tin cậy vào đường dẫn `FOSP_MODEL_PATH`, hoặc trỏ biến đến vị trí có sẵn. Không tải checkpoint vào Git. Runtime phải chứa cả `FoSp/` và `mmcv/`. Web FoSp hiện yêu cầu CUDA, chưa có đường chạy CPU. [Số liệu checkpoint 14.000](docs/fosp_smoke5k_14000.json): F1 trung bình theo ảnh 76,88%, IoU 68,24% trên 400 ảnh test SMOKE5K; không suy rộng thành độ chính xác mọi hiện trường.
+Đặt checkpoint `best.pth` đáng tin cậy vào đường dẫn `FOSP_MODEL_PATH`, hoặc trỏ biến đến vị trí có sẵn. Không tải checkpoint vào Git. Runtime phải chứa cả `FoSp/` và `mmcv/`. FoSp dùng CUDA khi khả dụng và hỗ trợ chạy trên CPU. [Số liệu checkpoint 14.000](docs/fosp_smoke5k_14000.json): F1 trung bình theo ảnh 76,88%, IoU 68,24% trên 400 ảnh test SMOKE5K; không suy rộng thành độ chính xác mọi hiện trường.
 
 Giữ nguyên `last.pth`, `best.pth`, `manifest.json`, `run_config.json`, kết quả và mã train cùng đợt trong ổ D để tiếp tục train. `last.pth` chứa optimizer/trạng thái train; không thay bằng `best.pth` khi resume. Xem [hướng dẫn notebook](notebooks/README.md) và [notebook tiếp tục FoSp](notebooks/fosp_continue.ipynb). Không thay tập chia dữ liệu hoặc lịch train khi chỉ tái cấu trúc web.
 
