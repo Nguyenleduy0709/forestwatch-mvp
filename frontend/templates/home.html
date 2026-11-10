@@ -1,8 +1,69 @@
-{% extends 'base.html' %}{% load static %}{% block content %}
-<main><section class="hero"><div class="hero-inner"><span class="eyebrow light"><i></i> CÔNG NGHỆ ĐỒNG HÀNH CÙNG THIÊN NHIÊN</span>
-<h1>Giữ màu xanh.<br><em>Nhận biết sớm.</em></h1><p>Một góc nhìn rõ hơn để bảo vệ cả khu rừng.<br>Phân tích hình ảnh, phát hiện dấu hiệu khói và đưa thông tin đến người giám sát.</p>
-<div class="hero-actions"><a class="button lime" href="{% url 'control_room' %}">Mở phòng giám sát <b>↗</b></a><a class="hero-link" href="#workflow">Khám phá quy trình ↓</a></div></div>
-<div class="hero-foot"><span>01 / FOREST MONITORING</span><span>Thiết kế cho người giám sát rừng <i class="live-dot"></i></span></div></section>
-<section class="intro section" id="workflow"><div><span class="eyebrow">TỪ QUAN SÁT ĐẾN HÀNH ĐỘNG</span><h2>Mỗi dấu hiệu nhỏ,<br>đều đáng được chú ý.</h2></div><p>ForestWatch kết nối bước phân tích hình ảnh với quy trình xác minh. Người vận hành luôn có ảnh bằng chứng, trạng thái xử lý và lịch sử để kiểm tra lại.</p></section>
-<section class="features section"><article><span class="feature-number">01</span><h3>Quan sát hiện trường</h3><p>Mở đến 10 nguồn từ camera, ảnh hoặc video. Khôi phục nguồn khi tải lại trang trên cùng trình duyệt.</p></article><article><span class="feature-number">02</span><h3>Nhận diện dấu hiệu khói</h3><p>FoSp lấy mẫu từ video đang phát. Người vận hành có thể phát chậm hoặc quét riêng khung hình đang dừng.</p></article><article><span class="feature-number">03</span><h3>Xác minh cảnh báo</h3><p>Kiểm tra ảnh bằng chứng, đối chiếu thời điểm và ghi lại kết quả xử lý.</p></article></section>
-<section class="closing section"><span class="eyebrow light">FORESTWATCH</span><h2>Theo dõi nguồn hình của bạn</h2><a class="button lime" href="{% url 'control_room' %}">Mở phòng giám sát ↗</a></section></main>{% endblock %}
+{% extends 'base.html' %}
+{% load static %}
+
+{% block content %}
+<main>
+  <!-- Hero Section -->
+  <section class="hero">
+    <div class="hero-inner">
+      <span class="eyebrow light"><i></i> HỆ THỐNG GIÁM SÁT THÔNG MINH · CÔNG NGHỆ BẢO VỆ THIÊN NHIÊN</span>
+      <h1>Giữ màu xanh.<br><em>Nhận biết sớm khói rừng.</em></h1>
+      <p>Một góc nhìn trực quan và chính xác hơn để bảo vệ cả cánh rừng nguyên sinh.<br>Tự động phân tích luồng CCTV, phát hiện khoanh vùng khói bằng mô hình AI và lập tức đối chiếu bằng chứng cho người trực ban.</p>
+      
+      <div class="hero-actions">
+        <a class="button lime" href="{% url 'control_room' %}">
+          <span>Mở phòng giám sát CCTV</span>
+          <b>↗</b>
+        </a>
+        <a class="button secondary" href="{% url 'dashboard' %}">
+          <span>Phân tích ảnh đơn lẻ</span>
+          <b>↗</b>
+        </a>
+        <a class="hero-link" href="#workflow">Quy trình vận hành ↓</a>
+      </div>
+    </div>
+    <div class="hero-foot">
+      <span>01 / MATRIX CCTV LIVE STREAMING</span>
+      <span>TỐI ĐA 10 MÀN HÌNH ĐỒNG THỜI · ĐỘ TRỄ THẤP <i class="live-dot"></i></span>
+    </div>
+  </section>
+
+  <!-- Workflow Intro -->
+  <section class="intro section" id="workflow">
+    <div>
+      <span class="eyebrow">TỪ QUAN SÁT ĐẾN HÀNH ĐỘNG</span>
+      <h2>Mỗi dấu hiệu nhỏ,<br>đều đáng được chú ý.</h2>
+    </div>
+    <p>ForestWatch kết nối luồng phân tích hình ảnh AI trực tiếp với quy trình phản ứng nhanh. Người vận hành luôn có đầy đủ ảnh bằng chứng tại hiện trường, chuỗi khung hình phát hiện liên tục, trạng thái xử lý và nhật ký đối soát toàn diện.</p>
+  </section>
+
+  <!-- Feature Grid -->
+  <section class="features section">
+    <article>
+      <span class="feature-number">01 / CCTV GRID</span>
+      <h3>Quan sát đa màn hình</h3>
+      <p>Giám sát đồng thời tới 10 nguồn cấp: Video tải lên, Link chia sẻ / Google Drive, Camera điện thoại qua mã QR LAN, hoặc Webcam máy tính.</p>
+    </article>
+    <article>
+      <span class="feature-number">02 / AI SEGMENTATION</span>
+      <h3>Nhận diện & Khoanh vùng khói</h3>
+      <p>Mô hình thị giác máy tính quét liên tục từng khung hình, tính toán độ che phủ và khoanh vùng khói theo thời gian thực với độ trễ thấp.</p>
+    </article>
+    <article>
+      <span class="feature-number">03 / VERIFICATION & LOGS</span>
+      <h3>Lưu trữ & Xác minh cảnh báo</h3>
+      <p>Lưu trữ ảnh bằng chứng riêng cho từng màn hình, lọc bỏ dữ liệu trùng lặp, hỗ trợ quản trị viên xác nhận sự cố và xử lý hàng loạt.</p>
+    </article>
+  </section>
+
+  <!-- CTA Banner -->
+  <section class="closing section">
+    <span class="eyebrow light">FOREST INTELLIGENCE MATRIX</span>
+    <h2>Bắt đầu giám sát cánh rừng của bạn ngay bây giờ</h2>
+    <div style="display:flex; justify-content:center; gap:16px; flex-wrap:wrap; margin-top:24px;">
+      <a class="button lime" href="{% url 'control_room' %}">Vào phòng giám sát ↗</a>
+      <a class="button secondary" href="{% url 'alerts' %}">Xem danh sách cảnh báo ↗</a>
+    </div>
+  </section>
+</main>
+{% endblock %}
