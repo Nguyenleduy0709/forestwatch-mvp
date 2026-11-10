@@ -18,6 +18,7 @@ urlpatterns = [
     path('logout/', views.logout_view, name='logout'),
     path('auth/google/login/', views.google_login, name='google_login'),
     path('auth/google/callback/', views.google_callback, name='google_callback'),
+    path('auth/google/set-password/', views.google_set_password, name='google_set_password'),
     path('dashboard/', views.dashboard, name='dashboard'),
     path('analyze/', views.analyze, name='analyze'),
     path('runs/<uuid:pk>/', views.detail, name='detail'),

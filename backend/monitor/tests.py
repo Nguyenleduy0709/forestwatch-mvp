@@ -227,13 +227,23 @@ class WorkflowTests(TestCase):
         with patch('monitor.auth_views.exchange_code_for_tokens', return_value=mock_tokens), \
              patch('monitor.auth_views.fetch_google_user_info', return_value=mock_userinfo):
             res = self.client.get(reverse('google_callback') + '?code=auth-code-xyz&state=valid-test-state')
-            self.assertRedirects(res, reverse('dashboard'))
+            self.assertRedirects(res, reverse('google_set_password'))
             new_user = get_user_model().objects.get(email='newranger@gmail.com')
             self.assertEqual(new_user.first_name, 'Lam')
             self.assertEqual(new_user.last_name, 'Nguyen')
             self.assertEqual(int(self.client.session['_auth_user_id']), new_user.pk)
+            self.assertFalse(new_user.has_usable_password())
 
-        # 2. Existing user logging in via Google OAuth
+        # 2. Set password for Google user
+        set_pwd_res = self.client.post(reverse('google_set_password'), {
+            'password': 'StrongPassword123!',
+            'password_confirm': 'StrongPassword123!',
+        })
+        self.assertRedirects(set_pwd_res, reverse('dashboard'))
+        new_user.refresh_from_db()
+        self.assertTrue(new_user.has_usable_password())
+
+        # 3. Existing user with password logging in via Google OAuth directly to dashboard
         self.client.logout()
         session = self.client.session
         session['google_oauth_state'] = 'second-test-state'
@@ -244,6 +254,38 @@ class WorkflowTests(TestCase):
             res2 = self.client.get(reverse('google_callback') + '?code=auth-code-xyz&state=second-test-state')
             self.assertRedirects(res2, reverse('dashboard'))
             self.assertEqual(int(self.client.session['_auth_user_id']), new_user.pk)
+
+        # 4. User can also log in directly via username OR email + password
+        self.client.logout()
+        # Login with email
+        login_email_res = self.client.post(reverse('login'), {
+            'username': 'newranger@gmail.com',
+            'password': 'StrongPassword123!',
+        })
+        self.assertRedirects(login_email_res, reverse('dashboard'))
+        self.assertEqual(int(self.client.session['_auth_user_id']), new_user.pk)
+
+        # Login with username
+        self.client.logout()
+        login_user_res = self.client.post(reverse('login'), {
+            'username': new_user.username,
+            'password': 'StrongPassword123!',
+        })
+        self.assertRedirects(login_user_res, reverse('dashboard'))
+        self.assertEqual(int(self.client.session['_auth_user_id']), new_user.pk)
+
+    def test_google_set_password_get_and_skip(self):
+        self.client.logout()
+        res = self.client.get(reverse('google_set_password'))
+        self.assertRedirects(res, f"{reverse('login')}?next={reverse('google_set_password')}")
+
+        self.client.force_login(self.user)
+        res_get = self.client.get(reverse('google_set_password'))
+        self.assertEqual(res_get.status_code, 200)
+        self.assertContains(res_get, 'Tạo mật khẩu')
+
+        res_skip = self.client.post(reverse('google_set_password'), {'skip': '1'})
+        self.assertRedirects(res_skip, reverse('dashboard'))
 
     def test_google_callback_invalid_state_and_error(self):
         self.client.logout()

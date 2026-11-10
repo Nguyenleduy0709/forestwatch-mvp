@@ -28,6 +28,7 @@ from .auth_views import (
     register,
     google_login,
     google_callback,
+    google_set_password,
     logout_view,
 )
 
