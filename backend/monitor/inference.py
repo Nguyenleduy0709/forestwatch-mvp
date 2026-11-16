@@ -8,11 +8,82 @@ EVIDENCE_CONFIDENCE = 0.40
 SMOKE_LABELS = {'smoke', 'khoi', 'khói'}
 
 
-def qualifies_for_evidence(detection, *, simulated=False):
+def qualifies_for_evidence(
+    detection,
+    *,
+    simulated=False,
+    min_confidence=EVIDENCE_CONFIDENCE,
+    min_coverage=0.0,
+):
     if detection.get('label') not in SMOKE_LABELS:
         return False
+    if simulated:
+        return True
     confidence = detection.get('confidence')
-    return simulated or (isinstance(confidence, (int, float)) and EVIDENCE_CONFIDENCE <= confidence <= 1)
+    if not (isinstance(confidence, (int, float)) and min_confidence <= confidence <= 1):
+        return False
+    coverage = detection.get('mask_coverage')
+    if coverage is not None and min_coverage and float(coverage) < min_coverage:
+        return False
+    return True
+
+
+def apply_exclusion_zones(image, exclusion_zones):
+    """Mask configured false-positive exclusion rectangles before AI inference."""
+    if not exclusion_zones:
+        return image
+    masked = image.copy()
+    draw = ImageDraw.Draw(masked)
+    w, h = masked.size
+    for zone in exclusion_zones:
+        x1 = int(float(zone.get('x', 0)) * w)
+        y1 = int(float(zone.get('y', 0)) * h)
+        x2 = int((float(zone.get('x', 0)) + float(zone.get('w', 0))) * w)
+        y2 = int((float(zone.get('y', 0)) + float(zone.get('h', 0))) * h)
+        if x2 > x1 and y2 > y1:
+            draw.rectangle((x1, y1, x2, y2), fill='#15211a')
+    return masked
+
+
+def filter_excluded_detections(detections, exclusion_zones, width, height):
+    """Drop detections whose center falls inside any excluded ROI box."""
+    if not detections or not exclusion_zones or not width or not height:
+        return detections
+    kept = []
+    for det in detections:
+        box = det.get('box')
+        if not box or len(box) < 4:
+            kept.append(det)
+            continue
+        cx = ((box[0] + box[2]) / 2.0) / width
+        cy = ((box[1] + box[3]) / 2.0) / height
+        inside = any(
+            float(z.get('x', 0)) <= cx <= float(z.get('x', 0)) + float(z.get('w', 0))
+            and float(z.get('y', 0)) <= cy <= float(z.get('y', 0)) + float(z.get('h', 0))
+            for z in exclusion_zones
+        )
+        if not inside:
+            kept.append(det)
+    return kept
+
+
+def draw_exclusion_zones(annotated, exclusion_zones):
+    """Draw subtle boundary rectangles for ROI exclusion zones on the annotated image."""
+    if not exclusion_zones:
+        return annotated
+    out = annotated.copy()
+    draw = ImageDraw.Draw(out)
+    w, h = out.size
+    for zone in exclusion_zones:
+        x1 = int(float(zone.get('x', 0)) * w)
+        y1 = int(float(zone.get('y', 0)) * h)
+        x2 = int((float(zone.get('x', 0)) + float(zone.get('w', 0))) * w)
+        y2 = int((float(zone.get('y', 0)) + float(zone.get('h', 0))) * h)
+        if x2 > x1 and y2 > y1:
+            draw.rectangle((x1, y1, x2, y2), outline='#38bdf8', width=2)
+            label = str(zone.get('label') or 'ROI Loại trừ')[:24]
+            draw.text((x1 + 6, y1 + 4), f'[Bỏ qua] {label}', fill='#38bdf8')
+    return out
 
 
 def current_model_name():

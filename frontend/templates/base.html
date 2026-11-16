@@ -22,6 +22,7 @@
       <a href="{% url 'control_room' %}" {% if request.resolver_match.url_name == 'control_room' %}aria-current="page"{% endif %}>Phòng giám sát</a>
       <a href="{% url 'alerts' %}" {% if request.resolver_match.url_name == 'alerts' or request.resolver_match.url_name == 'detail' %}aria-current="page"{% endif %}>Cảnh báo</a>
       <a href="{% url 'dashboard' %}" {% if request.resolver_match.url_name == 'dashboard' %}aria-current="page"{% endif %}>Phân tích ảnh</a>
+      <a href="{% url 'settings' %}" {% if request.resolver_match.url_name == 'settings' %}aria-current="page"{% endif %}>Cấu hình</a>
     </nav>
     {% if user.is_authenticated %}
       <form method="post" action="{% url 'logout' %}" class="account">

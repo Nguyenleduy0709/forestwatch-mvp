@@ -1,0 +1,313 @@
+{% extends 'base.html' %}
+{% load static l10n %}
+{% block title %}Cấu hình Hệ thống & Cảnh báo Ngoài — ForestWatch{% endblock %}
+{% block body_class %}cctv-page{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{% static 'css/control-room.css' %}">
+<style>
+  .fw-settings-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+  .fw-preset-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 16px 20px;
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.14), rgba(5, 150, 105, 0.06));
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    border-radius: 12px;
+    margin-bottom: 22px;
+  }
+  .fw-preset-banner h2 { font-size: 16px; margin: 0 0 4px; color: #fff; }
+  .fw-preset-banner p { margin: 0; font-size: 12px; }
+  .fw-form-grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  .fw-switch-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    border-radius: 8px;
+    background: var(--cctv-panel-alt);
+    border: 1px solid var(--cctv-line);
+    margin: 14px 0 6px;
+    cursor: pointer;
+  }
+  .fw-switch-row input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: #10b981;
+  }
+  .fw-switch-row strong { display: block; font-size: 13px; color: #fff; }
+  .fw-switch-row small { display: block; font-size: 11px; color: var(--cctv-muted); }
+  .fw-channel-box {
+    padding: 16px;
+    border: 1px solid var(--cctv-line);
+    border-radius: 10px;
+    background: rgba(14, 23, 19, 0.6);
+    margin-bottom: 16px;
+  }
+  @media (max-width: 980px) {
+    .fw-settings-grid, .fw-form-grid-2 { grid-template-columns: 1fr; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<main class="cctv-control-center" style="max-width: 1360px;">
+  <header class="cctv-heading">
+    <div>
+      <div class="cctv-kicker"><i></i> FORESTWATCH / PRODUCTION SETTINGS & ALERTING</div>
+      <h1>Cấu hình Thực tế & Kênh Cảnh báo</h1>
+      <p>Tinh chỉnh bộ lọc chống báo động giả đa khung hình, thiết lập gửi ảnh khói tức thì qua Telegram / Email / Webhook và quản lý dung lượng lưu trữ.</p>
+    </div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <a class="cctv-btn" href="{% url 'export_alerts_csv' %}">📥 Xuất báo cáo CSV</a>
+      <a class="cctv-btn" href="{% url 'control_room' %}">← Về Phòng giám sát</a>
+    </div>
+  </header>
+
+  <form method="post" class="fw-preset-banner">
+    {% csrf_token %}
+    <div>
+      <h2>🛡️ Chế độ Khuyến nghị Doanh nghiệp & Thực địa (Giảm báo giả tối đa)</h2>
+      <p>Tự động thiết lập: Yêu cầu <b>3 khung hình có khói liên tiếp</b>, diện tích khói ≥ <b>0,25%</b>, giãn cách lưu ảnh <b>3 giây</b>, bảo toàn lịch sử video.</p>
+    </div>
+    <button type="submit" name="action" value="preset_enterprise" class="button small">
+      Áp dụng cấu hình Doanh nghiệp ngay ↗
+    </button>
+  </form>
+
+  {% if test_results %}
+    <div class="notice green" style="margin-bottom: 22px;">
+      <strong>Kết quả kiểm tra gửi thông báo thực tế:</strong>
+      {% for item in test_results %}
+        <p style="margin-top:6px;">
+          {% if item.ok %}✅{% else %}❌{% endif %}
+          <b>{{ item.channel }}:</b> {{ item.detail }}
+        </p>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <form method="post">
+    {% csrf_token %}
+    <div class="fw-settings-grid">
+      <!-- Column 1: AI Anti-False-Positive & Channels -->
+      <div style="display:flex; flex-direction:column; gap:22px;">
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>1. Bộ lọc AI & Chống Báo động Giả</h2>
+            <span>ANTI-FALSE-POSITIVE PIPELINE</span>
+          </div>
+
+          <label for="id_organization_name">Tên đơn vị / Chủ rừng / Doanh nghiệp</label>
+          <input id="id_organization_name" name="organization_name" type="text"
+                 value="{{ profile.organization_name }}"
+                 placeholder="VD: Ban Quản lý Rừng Phòng hộ Bắc Hải Vân">
+
+          <div class="fw-form-grid-2">
+            <div>
+              <label for="id_min_confidence">Ngưỡng tin cậy AI (0.15 - 0.95)</label>
+              <input id="id_min_confidence" name="min_confidence" type="number" step="0.05" min="0.15" max="0.95"
+                     value="{{ profile.min_confidence|unlocalize }}">
+              <small style="color:var(--muted);font-size:11px;">Khuyến nghị thực tế: 0.45 – 0.55</small>
+            </div>
+            <div>
+              <label for="id_min_smoke_coverage">Diện tích khói tối thiểu (%)</label>
+              <input id="id_min_smoke_coverage" name="min_smoke_coverage" type="number" step="0.05" min="0" max="50"
+                     value="{{ profile.min_smoke_coverage|unlocalize }}">
+              <small style="color:var(--muted);font-size:11px;">Lọc nhiễu đốm nhỏ (&lt; 0.25% thường là lóa nắng/bụi)</small>
+            </div>
+          </div>
+
+          <div class="fw-form-grid-2">
+            <div>
+              <label for="id_persistence_frames">Số khung liên tiếp để báo động (1 - 10)</label>
+              <input id="id_persistence_frames" name="persistence_frames" type="number" min="1" max="10"
+                     value="{{ profile.persistence_frames|unlocalize }}">
+              <small style="color:var(--muted);font-size:11px;">Đặt 2–3 khi chạy Live Cam để tránh sương mù thoáng qua</small>
+            </div>
+            <div>
+              <label for="id_capture_interval_seconds">Chu kỳ lưu ảnh chụp liên tục (giây)</label>
+              <input id="id_capture_interval_seconds" name="capture_interval_seconds" type="number" min="0" max="60"
+                     value="{{ profile.capture_interval_seconds|unlocalize }}">
+              <small style="color:var(--muted);font-size:11px;">Đặt 3–5s giúp chống đầy ổ cứng khi quay 24/7</small>
+            </div>
+          </div>
+
+          <div class="fw-form-grid-2">
+            <div>
+              <label for="id_alert_cooldown_seconds">Giãn cách gửi Telegram/Email (giây)</label>
+              <input id="id_alert_cooldown_seconds" name="alert_cooldown_seconds" type="number" min="5" max="3600"
+                     value="{{ profile.alert_cooldown_seconds|unlocalize }}">
+            </div>
+            <div>
+              <label for="id_retention_days">Tự xóa ảnh quét cũ sau (ngày, 0=Giữ mãi)</label>
+              <input id="id_retention_days" name="retention_days" type="number" min="0" max="365"
+                     value="{{ profile.retention_days|unlocalize }}">
+            </div>
+          </div>
+
+          <label class="fw-switch-row" for="id_preserve_replay_history" style="text-transform:none;">
+            <input id="id_preserve_replay_history" name="preserve_replay_history" type="checkbox"
+                   {% if profile.preserve_replay_history %}checked{% endif %}>
+            <span>
+              <strong>Bảo toàn lịch sử khi phát lại video kiểm thử</strong>
+              <small>Khi bật, phát lại video từ đầu sẽ giữ nguyên mọi cảnh báo cũ (bắt buộc cho lưu trữ thực tế).</small>
+            </span>
+          </label>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>2. Kênh Cảnh báo Ngoài Ứng dụng (24/7)</h2>
+            <span>TELEGRAM · EMAIL · WEBHOOK</span>
+          </div>
+
+          <!-- Telegram -->
+          <div class="fw-channel-box">
+            <label class="fw-switch-row" for="id_telegram_enabled" style="margin-top:0;text-transform:none;">
+              <input id="id_telegram_enabled" name="telegram_enabled" type="checkbox"
+                     {% if profile.telegram_enabled %}checked{% endif %}>
+              <span>
+                <strong>✈️ Telegram Bot (Gửi ngay ảnh khoanh vùng khói + link Maps)</strong>
+                <small>Miễn phí, độ trễ &lt; 1 giây tới nhóm trực ban PCCC / Kiểm lâm.</small>
+              </span>
+            </label>
+            <div class="fw-form-grid-2">
+              <div>
+                <label for="id_telegram_bot_token">Bot Token (@BotFather)</label>
+                <input id="id_telegram_bot_token" name="telegram_bot_token" type="text"
+                       value="{{ masked_token }}" placeholder="123456789:AAH...">
+              </div>
+              <div>
+                <label for="id_telegram_chat_id">Chat ID / Group ID</label>
+                <input id="id_telegram_chat_id" name="telegram_chat_id" type="text"
+                       value="{{ profile.telegram_chat_id }}" placeholder="-1001234567890">
+              </div>
+            </div>
+          </div>
+
+          <!-- Email -->
+          <div class="fw-channel-box">
+            <label class="fw-switch-row" for="id_email_enabled" style="margin-top:0;text-transform:none;">
+              <input id="id_email_enabled" name="email_enabled" type="checkbox"
+                     {% if profile.email_enabled %}checked{% endif %}>
+              <span>
+                <strong>📧 Email SMTP (Kèm ảnh bằng chứng hiện trường)</strong>
+                <small>Cấu hình <code>EMAIL_HOST</code> &amp; <code>EMAIL_HOST_USER</code> trong file <code>.env</code> khi triển khai.</small>
+              </span>
+            </label>
+            <label for="id_email_recipients">Danh sách Email nhận cảnh báo (cách nhau bằng dấu phẩy)</label>
+            <input id="id_email_recipients" name="email_recipients" type="text"
+                   value="{{ profile.email_recipients }}" placeholder="trucban@kiemlam.vn, quanly@congty.vn">
+          </div>
+
+          <!-- Webhook -->
+          <div class="fw-channel-box" style="margin-bottom:0;">
+            <label class="fw-switch-row" for="id_webhook_enabled" style="margin-top:0;text-transform:none;">
+              <input id="id_webhook_enabled" name="webhook_enabled" type="checkbox"
+                     {% if profile.webhook_enabled %}checked{% endif %}>
+              <span>
+                <strong>🔗 Webhook (Discord / Slack / Zalo OA / Còi báo IoT)</strong>
+                <small>Gửi JSON POST khi phát hiện khói kèm tọa độ GPS &amp; mức độ tin cậy.</small>
+              </span>
+            </label>
+            <label for="id_webhook_url">URL Webhook đích</label>
+            <input id="id_webhook_url" name="webhook_url" type="url"
+                   value="{{ profile.webhook_url }}" placeholder="https://discord.com/api/webhooks/...">
+          </div>
+
+          <div class="actions" style="margin-top:20px;">
+            <button type="submit" name="action" value="save" class="button">💾 Lưu toàn bộ cấu hình</button>
+            <button type="submit" name="action" value="test_notify" class="button secondary">🚀 Lưu &amp; Gửi thử thông báo ngay</button>
+          </div>
+        </section>
+      </div>
+
+      <!-- Column 2: Storage, Cleanup, Stations Overview & Delivery Logs -->
+      <aside style="display:flex; flex-direction:column; gap:22px;">
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>3. Quản lý Lưu trữ & Dữ liệu</h2>
+            <span>{{ capture_total }} ẢNH CHỤP</span>
+          </div>
+          <p style="font-size:13px;">Hệ thống hiện đang lưu <strong>{{ capture_total }}</strong> ảnh chụp khung hình khói liên tục của bạn.</p>
+          <p style="font-size:12px;">Các ảnh đã xác nhận cháy thật (<code>CONFIRMED</code>) được bảo vệ an toàn khi dọn dẹp tự động.</p>
+          <div class="actions">
+            <button type="submit" name="action" value="cleanup_now" class="button secondary"
+                    onclick="return confirm('Xóa các ảnh quét chưa xác nhận cũ hơn {{ profile.retention_days }} ngày?');">
+              🧹 Dọn dữ liệu cũ (&gt; {{ profile.retention_days }} ngày)
+            </button>
+            <a class="button secondary" href="{% url 'export_alerts_csv' %}">📥 Tải CSV Sự cố</a>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>4. Trạm Camera đã lưu ({{ stations|length }})</h2>
+            <span>ĐỒNG BỘ TRÊN SERVER</span>
+          </div>
+          {% for st in stations %}
+            <div style="padding:10px 12px; border:1px solid var(--line); border-radius:8px; margin-bottom:8px; background:var(--surface-elevated);">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <strong>CAM {{ st.channel_number|stringformat:"02d" }} · {{ st.name }}</strong>
+                <span class="pill {% if st.status == 'ALERTING' %}danger{% elif st.status == 'OFFLINE' %}warning{% endif %}">{{ st.get_status_display }}</span>
+              </div>
+              <small style="display:block;color:var(--muted);font-size:11px;margin-top:3px;">
+                {{ st.get_source_type_display }}
+                {% if st.exclusion_zones %} · 🚫 {{ st.exclusion_zones|length }} vùng loại trừ ROI{% endif %}
+              </small>
+            </div>
+          {% empty %}
+            <p style="font-size:12px;">Chưa có trạm camera nào. Thêm nguồn ở Phòng giám sát để đồng bộ đa thiết bị.</p>
+          {% endfor %}
+        </section>
+
+        <section class="panel">
+          <div class="panel-heading">
+            <h2>5. Nhật ký Gửi Thông báo</h2>
+            <span>20 LẦN GẦN NHẤT</span>
+          </div>
+          <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Thời gian</th>
+                  <th>Kênh</th>
+                  <th>Trạng thái</th>
+                  <th>Chi tiết</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for log in logs %}
+                  <tr>
+                    <td>{{ log.created_at|date:'d/m H:i:s' }}</td>
+                    <td>{{ log.get_channel_display }}</td>
+                    <td>
+                      <span class="pill {% if log.status == 'FAILED' %}danger{% endif %}">{{ log.get_status_display }}</span>
+                    </td>
+                    <td style="white-space:normal; max-width:220px;">{{ log.detail }}</td>
+                  </tr>
+                {% empty %}
+                  <tr><td colspan="4" style="text-align:center;color:var(--muted);">Chưa có lượt gửi thông báo ngoài nào.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </form>
+</main>
+{% endblock %}

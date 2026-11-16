@@ -1,4 +1,5 @@
 import os
+import sys
 from ipaddress import IPv4Network
 from pathlib import Path
 
@@ -48,6 +49,10 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 # Evidence is served by an authenticated view, not a public media directory.
 MEDIA_ROOT = Path(os.getenv('MEDIA_ROOT', str(BASE_DIR / 'media')))
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+AUTHENTICATION_BACKENDS = [
+    'monitor.auth_backend.EmailOrUsernameModelBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
 LOGIN_URL = 'login'
 LOGIN_REDIRECT_URL = os.getenv('LOGIN_REDIRECT_URL', 'dashboard')
 LOGOUT_REDIRECT_URL = 'home'
@@ -69,6 +74,33 @@ FOSP_GATE_THRESHOLD = float(os.getenv('FOSP_GATE_THRESHOLD', '0.0' if FOSP_GATE_
 PHONE_CAMERA_NETWORKS = tuple(
     IPv4Network(value.strip()) for value in os.getenv('PHONE_CAMERA_NETWORKS', '').split(',') if value.strip()
 )
+ALLOW_LAN_CAMERAS = os.getenv('ALLOW_LAN_CAMERAS', '1' if DEBUG else '0') == '1'
+
+_CACHE_DIR = Path(os.getenv('CACHE_DIR', str(BASE_DIR.parent / 'work/cache')))
+if 'test' in sys.argv:
+    CACHES = {'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'}}
+else:
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
+            'LOCATION': str(_CACHE_DIR),
+            'OPTIONS': {'MAX_ENTRIES': 2000},
+        }
+    }
+
+EMAIL_HOST = os.getenv('EMAIL_HOST', '').strip()
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '').strip()
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '').strip()
+EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', '1') == '1'
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER or 'noreply@forestwatch.local')
+EMAIL_BACKEND = (
+    'django.core.mail.backends.smtp.EmailBackend'
+    if EMAIL_HOST and EMAIL_HOST_USER
+    else 'django.core.mail.backends.console.EmailBackend'
+)
+
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SESSION_COOKIE_HTTPONLY = True
 SESSION_COOKIE_SECURE = not DEBUG

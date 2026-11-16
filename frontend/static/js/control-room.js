@@ -30,13 +30,31 @@
     const headers = { 'X-CSRFToken': room.dataset.csrf };
     const scanUrl = room.dataset.scan;
     const screenReportsUrl = room.dataset.screenReports || '';
+    const stationsUrl = room.dataset.stationsUrl || '';
     const phoneQrUrl = room.dataset.phoneQr || '';
     const resolveUrl = room.dataset.resolve;
     const resolvePhoneUrl = room.dataset.resolvePhone;
     const referenceEnabled = room.dataset.reference === '1';
     const account = room.dataset.account;
+    const preserveReplayToggle = get('#cctv-preserve-replay');
+    const simulatorField = get('#cctv-simulator-field');
+    const scenarioInput = get('#cctv-simulator-scenario');
+    const locationInput = get('#cctv-station-location');
+    const latInput = get('#cctv-station-lat');
+    const lonInput = get('#cctv-station-lon');
+    const azimuthInput = get('#cctv-station-azimuth');
+    const roiTopSkyInput = get('#cctv-roi-top-sky');
+    const LIVE_IMG_TYPES = new Set(['phone', 'simulator', 'rtsp', 'http_snapshot']);
     const labels = {
-        image: 'Ảnh tĩnh', video: 'Video từ máy', url: 'Liên kết video', webcam: 'Webcam / USB', phone: 'Camera điện thoại (QR)',
+        image: 'Ảnh tĩnh',
+        video: 'Video từ máy',
+        url: 'Liên kết video',
+        webcam: 'Webcam / USB',
+        phone: 'Camera điện thoại (QR)',
+        simulator: 'Giả lập Live Cam',
+        rtsp: 'Camera IP (RTSP)',
+        http_snapshot: 'Camera IP (HTTP)',
+        hls: 'Luồng trực tiếp (HLS)',
     };
     let autoEnabled = true;
     let manualLayout = false;
@@ -49,9 +67,21 @@
     let audio = null;
     let soundEnabled = false;
     let inFlightCount = 0;
-    const maxConcurrentScans = 2;
+    const maxConcurrentScans = 1;
     let lastSlot = 0;
     const eventRows = new Map();
+    const WATCHTOWER_PRESETS = [
+        { name: 'Trạm Chòi Canh Bắc', inputUrl: 'https://www.youtube.com/watch?v=wSp-pUDcFQI', minStart: 1.0 },
+        { name: 'Trạm Đồi Thông Đông', inputUrl: 'https://www.youtube.com/watch?v=RWoYegPgRF4', minStart: 1.0 },
+        { name: 'Trạm Quan Trắc Nam', inputUrl: 'https://www.youtube.com/watch?v=TtUgnRqARUE', minStart: 15.0 },
+        { name: 'Trạm Đỉnh Đèo Tây', inputUrl: 'https://www.youtube.com/watch?v=FZNDqZJvc5w', minStart: 1.0 },
+    ];
+    function getMinStartTime(saved, playback = '') {
+        const ref = `${saved?.inputUrl || ''} ${playback || ''}`;
+        if (ref.includes('TtUgnRqARUE'))
+            return 15.0;
+        return 0;
+    }
     function openStorage() {
         return new Promise((resolve, reject) => {
             const request = indexedDB.open('forestwatch-monitoring', 1);
@@ -105,16 +135,21 @@
         }
         catch { /* Playback can continue when browser storage is unavailable. */ }
     }
-    function resumePosition(saved, media) {
+    function resumePosition(saved, media, playback = '') {
         if (saved.type === 'webcam' || !Number.isFinite(media.duration))
             return;
+        const minStart = getMinStartTime(saved, playback);
         try {
             const previous = JSON.parse(localStorage.getItem(positionKey(saved.id)) ?? 'null');
-            if (previous?.key === saved.key && previous.time > 0 && previous.time < media.duration - 0.2) {
+            if (previous?.key === saved.key && previous.time > minStart && previous.time < media.duration - 0.5) {
                 media.currentTime = previous.time;
+                return;
             }
         }
         catch { /* Ignore unavailable or invalid playback history. */ }
+        if (minStart > 0 && media.currentTime < minStart && minStart < media.duration - 1.0) {
+            media.currentTime = minStart;
+        }
     }
     function channel(id) {
         return `CAM ${String(id).padStart(2, '0')}`;
@@ -149,11 +184,13 @@
         const source = slot.source;
         const media = source?.element;
         const refTime = source?.overlayTime ?? source?.lastTime ?? -1;
-        const hide = !source?.frame || !ready(source) || (media instanceof HTMLVideoElement && !slot.scanning && Math.abs(media.currentTime - refTime) > 8.0) || (source.phoneFrame !== null && !slot.scanning && Math.abs(source.phoneFrame.sequence - source.lastTime) > 4);
+        const maxAge = Math.max(28.0, slots.size * 7.0);
+        const hide = !source?.frame || !ready(source) || (!source.isWatchtowerStream && media instanceof HTMLVideoElement && !slot.scanning && Math.abs(media.currentTime - refTime) > maxAge) || (source.phoneFrame !== null && !slot.scanning && Math.abs(source.phoneFrame.sequence - source.lastTime) > 6);
         slot.overlay.toggleAttribute('hidden', hide);
     }
     function drawOverlay(slot, result) {
         slot.overlay.replaceChildren();
+        slot.overlay.classList.toggle('is-suspected', Boolean(result.suspected));
         slot.overlay.setAttribute('viewBox', `0 0 ${result.image_width} ${result.image_height}`);
         for (const item of result.detections) {
             if (item.polygon?.length) {
@@ -194,7 +231,12 @@
             status(slot, 'waiting', autoEnabled ? 'Chờ bắt đầu quét' : 'Quét tự động đang tạm dừng');
         }
         else if (!canScan) {
-            status(slot, 'waiting', slot.saved?.type === 'phone' ? 'Đang chờ điện thoại truyền hình…' : 'Đang tải nguồn');
+            status(slot, 'waiting', slot.saved?.type === 'phone' ? 'Đang chờ điện thoại truyền hình…' : 'Đang kết nối luồng hình…');
+        }
+        else if (source.frame?.suspected) {
+            const st = source.frame.streak || 1;
+            const req = source.frame.required_streak || 2;
+            status(slot, 'waiting', `Nghi vấn khói (${st}/${req})`);
         }
         else if (source.frame?.has_smoke) {
             status(slot, source.frame.alert ? 'smoke' : 'waiting', source.frame.alert ? 'Có dấu hiệu khói' : 'Dưới ngưỡng lưu');
@@ -243,8 +285,12 @@
                 return;
             remove.disabled = true;
             try {
+                const stationIdToDelete = slot.saved?.stationId;
                 if (slot.saved)
                     await updateStorage(id, null);
+                if (stationIdToDelete) {
+                    void fetch(`/api/stations/${stationIdToDelete}/`, { method: 'DELETE', headers }).catch(() => { });
+                }
                 slot.restore?.abort();
                 slot.source?.dispose();
                 slots.delete(id);
@@ -286,7 +332,7 @@
             slot.manual = true;
             slot.scan.disabled = true;
             status(slot, 'waiting', 'Đang chờ quét');
-            if (slot.source?.element instanceof HTMLVideoElement && slot.source.element.currentTime <= 2.0) {
+            if (!(preserveReplayToggle?.checked) && slot.source?.element instanceof HTMLVideoElement && slot.source.element.currentTime <= 2.0) {
                 slot.source.videoReplayed = true;
                 void resetVideoAlerts(slot);
             }
@@ -349,14 +395,41 @@
         if (slot.saved === saved)
             showReference(slot);
     }
+    function loadHlsPlayer(videoEl, hlsUrl, events) {
+        if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+            videoEl.src = hlsUrl;
+            return;
+        }
+        const attach = (HlsCtor) => {
+            if (events.signal.aborted || !HlsCtor?.isSupported()) {
+                videoEl.src = hlsUrl;
+                return;
+            }
+            const hls = new HlsCtor({ lowLatencyMode: true });
+            hls.loadSource(hlsUrl);
+            hls.attachMedia(videoEl);
+            events.signal.addEventListener('abort', () => hls.destroy(), { once: true });
+        };
+        if (window.Hls) {
+            attach(window.Hls);
+            return;
+        }
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js';
+        script.onload = () => attach(window.Hls);
+        script.onerror = () => { videoEl.src = hlsUrl; };
+        document.head.append(script);
+    }
     function mountSource(slot, saved, label, playback, stream) {
         const { type, name, file, rate } = saved;
-        const clip = type === 'video' || type === 'url';
+        const isWatchtowerStream = typeof playback === 'string' && playback.startsWith('/api/video/demo-stream/');
+        const clip = (type === 'video' || type === 'url') && !isWatchtowerStream;
+        const isLiveImg = LIVE_IMG_TYPES.has(type);
         if (slot.saved?.key !== saved.key)
             slot.evidence.hidden = true;
         slot.saved = saved;
         slot.source?.dispose();
-        const media = document.createElement(type === 'image' || type === 'phone' ? 'img' : 'video');
+        const media = document.createElement(type === 'image' || isLiveImg ? 'img' : 'video');
         const events = new AbortController();
         const options = { signal: events.signal };
         const objectUrl = file ? URL.createObjectURL(file) : '';
@@ -365,6 +438,7 @@
         const source = {
             element: media, imageFile: type === 'image' ? file : null,
             phoneFrame: null,
+            isWatchtowerStream,
             error: '', lastTime: -1, nextScan: 0,
             frame: null,
             started: !clip, resumeOnScan: false,
@@ -476,14 +550,15 @@
         }
 
         if (media instanceof HTMLVideoElement) {
+            const minStart = getMinStartTime(saved, playback);
             media.controls = !clip;
             media.preload = clip ? 'metadata' : 'auto';
             media.muted = true;
             media.playsInline = true;
             media.defaultPlaybackRate = rate;
             media.playbackRate = rate;
-            media.loop = false;
-            media.addEventListener('loadedmetadata', () => resumePosition(saved, media), { ...options, once: true });
+            media.loop = isWatchtowerStream;
+            media.addEventListener('loadedmetadata', () => resumePosition(saved, media, playback), { ...options, once: true });
             media.addEventListener('loadeddata', onReady, options);
             media.addEventListener('playing', onReady, options);
             media.addEventListener('play', () => {
@@ -491,7 +566,10 @@
                     if (!source.started || !autoEnabled)
                         media.pause();
                 }
-                if (source.hasEnded || ((source.maxSeenPosition || 0) > 3.0 && media.currentTime < 1.5)) {
+                if (minStart > 0 && media.currentTime < minStart && Number.isFinite(media.duration) && minStart < media.duration - 1.0) {
+                    media.currentTime = minStart;
+                }
+                if (!isWatchtowerStream && !(preserveReplayToggle?.checked) && (source.hasEnded || ((source.maxSeenPosition || 0) > 3.0 && media.currentTime < 1.5))) {
                     source.hasEnded = false;
                     void resetVideoAlerts(slot);
                 }
@@ -503,6 +581,10 @@
             }, options);
             let lastPositionWrite = 0;
             media.addEventListener('timeupdate', () => {
+                if (minStart > 0 && media.currentTime < minStart - 0.5 && Number.isFinite(media.duration) && minStart < media.duration - 1.0 && !media.seeking) {
+                    media.currentTime = minStart;
+                    return;
+                }
                 if (media.currentTime > (source.maxSeenPosition || 0)) {
                     source.maxSeenPosition = media.currentTime;
                 }
@@ -519,7 +601,7 @@
                 updateOverlay(slot);
             }, options);
             media.addEventListener('seeked', () => {
-                if ((source.maxSeenPosition || 0) > 3.0 && media.currentTime < 1.0) {
+                if (!isWatchtowerStream && !(preserveReplayToggle?.checked) && (source.maxSeenPosition || 0) > 3.0 && media.currentTime < 1.0) {
                     void resetVideoAlerts(slot);
                 }
                 rememberPosition(saved, media);
@@ -531,6 +613,9 @@
                     track.addEventListener('ended', () => mediaError('Camera đã ngắt kết nối.'), options);
                 }
             }
+            else if (type === 'hls') {
+                loadHlsPlayer(media, playback, events);
+            }
             else {
                 media.src = objectUrl || playback;
             }
@@ -540,9 +625,10 @@
         else {
             media.alt = name;
             media.addEventListener('load', onReady, options);
-            if (type === 'phone') {
+            if (isLiveImg) {
                 let etag = '';
-                const pollPhone = async () => {
+                const pollInterval = type === 'simulator' ? 1600 : type === 'phone' ? 180 : 900;
+                const pollLiveFrame = async () => {
                     try {
                         const response = await fetch(playback, {
                             cache: 'no-store', signal: events.signal,
@@ -567,7 +653,7 @@
                             throw new Error('Phiên đăng nhập đã hết. Hãy tải lại trang.');
                         if (!response.ok || !response.headers.get('Content-Type')?.startsWith('image/jpeg')) {
                             const details = await response.json().catch(() => null);
-                            throw new Error(details?.message || 'Chưa nhận được hình từ điện thoại.');
+                            throw new Error(details?.message || 'Chưa nhận được khung hình từ camera.');
                         }
                         const image = await response.blob();
                         if (events.signal.aborted)
@@ -587,10 +673,10 @@
                     }
                     finally {
                         if (!events.signal.aborted)
-                            phoneTimer = window.setTimeout(pollPhone, source.error ? 1200 : 180);
+                            phoneTimer = window.setTimeout(pollLiveFrame, source.error ? 2000 : pollInterval);
                     }
                 };
-                void pollPhone();
+                void pollLiveFrame();
             }
             else {
                 media.src = objectUrl;
@@ -651,49 +737,73 @@
     function showSourceFields() {
         const type = typeInput.value;
         const useFile = type === 'image' || type === 'video';
-        const useUrl = type === 'url';
-        const usePhoneQr = type === 'phone';
-        get('#cctv-file-field').hidden = !useFile;
-        get('#cctv-url-field').hidden = !useUrl;
-        const qrField = document.querySelector('#cctv-phone-qr-field');
-        if (qrField)
-            qrField.hidden = !usePhoneQr;
-        get('#cctv-device-field').hidden = type !== 'webcam';
+        const useUrl = type === 'url' || type === 'rtsp' || type === 'http_snapshot' || type === 'hls';
+        const useSim = type === 'simulator';
+        const fileField = document.querySelector('#cctv-file-field');
+        const urlField = document.querySelector('#cctv-url-field');
+        const deviceField = document.querySelector('#cctv-device-field');
+        const demoPresets = document.querySelector('#cctv-demo-video-presets');
+        if (fileField) fileField.hidden = !useFile;
+        if (urlField) urlField.hidden = !useUrl;
+        if (demoPresets) demoPresets.hidden = type !== 'url';
+        if (simulatorField) simulatorField.hidden = !useSim;
+        if (deviceField) deviceField.hidden = true;
         fileInput.disabled = !useFile;
         fileInput.value = '';
         const previous = editing === null ? null : slots.get(editing)?.saved;
         const keepFile = previous?.type === type ? previous.file : null;
         fileInput.required = useFile && !keepFile;
-        urlInput.disabled = !useUrl && !usePhoneQr;
+        urlInput.disabled = !useUrl;
         urlInput.required = useUrl;
-        get('#cctv-url-label').textContent = 'Liên kết video công khai';
-        urlInput.placeholder = 'https://…';
+        const urlLabels = {
+            url: 'Liên kết video công khai (YouTube / MP4)',
+            rtsp: 'Địa chỉ luồng Camera IP RTSP (rtsp://user:pass@ip:554/...)',
+            http_snapshot: 'Địa chỉ ảnh chụp JPEG từ Camera IP (http://ip/shot.jpg)',
+            hls: 'Đường dẫn luồng phát trực tiếp HLS (.m3u8)',
+        };
+        const urlPlaceholders = {
+            url: 'https://www.youtube.com/watch?v=…',
+            rtsp: 'rtsp://admin:password@192.168.1.50:554/Streaming/Channels/101',
+            http_snapshot: 'http://192.168.1.50/snap.jpg',
+            hls: 'https://example.com/live/forest-cam.m3u8',
+        };
+        get('#cctv-url-label').textContent = urlLabels[type] || 'Liên kết nguồn hình';
+        urlInput.placeholder = urlPlaceholders[type] || 'https://…';
         fileInput.accept = type === 'image' ? 'image/jpeg,image/png,image/webp' : 'video/*,.mp4,.webm';
         get('#cctv-file-label').textContent = type === 'image' ? 'Chọn ảnh' : 'Chọn video';
         const hints = {
+            simulator: 'Giả lập camera rừng trực tiếp theo thời gian thực để test AI, lọc báo giả đa khung và gửi Telegram ngay cả khi chưa có Camera vật lý.',
+            rtsp: 'Kết nối thẳng tới Camera IP Hikvision/Dahua/Yoosee qua RTSP. Máy chủ kéo khung hình định kỳ, giám sát ngắt kết nối và quét khói 24/7.',
+            http_snapshot: 'Lấy ảnh JPEG trực tiếp từ các camera IP hỗ trợ HTTP Snapshot URL.',
+            hls: 'Phát trực tiếp các luồng camera công cộng hoặc MediaMTX định dạng .m3u8.',
             image: 'Ảnh JPG, PNG hoặc WebP, tối đa 10 MB. Ảnh được quét một lần khi mở nguồn.',
-            video: 'Ưu tiên MP4 hoặc WebM. Video sẽ phát một lần (không lặp lại) và được quét liên tục khi đang phát.',
-            url: 'Dùng video YouTube công khai hoặc URL trả về tệp video mà trình duyệt phát được, như MP4 hoặc WebM.',
-            webcam: 'Trình duyệt sẽ hỏi quyền truy cập camera. Dùng HTTPS hoặc localhost để kết nối.',
-            phone: 'Dùng điện thoại quét mã QR ở trên để mở giao diện Share Cam, sau đó bấm Lưu nguồn để thu trực tiếp hình từ điện thoại lên màn hình này.',
+            video: 'Ưu tiên MP4 hoặc WebM. Dùng công tắc "Giữ lịch sử phát lại" nếu muốn giữ toàn bộ bằng chứng cũ.',
+            url: 'Bấm chọn nhanh 1 video cháy rừng ALERTCalifornia ở trên hoặc dán link YouTube / URL MP4 công khai.',
         };
-        get('#cctv-source-help').textContent = keepFile ? `Đang dùng ${keepFile.name}. Chọn tệp nếu muốn thay.` : hints[type];
+        get('#cctv-source-help').textContent = keepFile ? `Đang dùng ${keepFile.name}. Chọn tệp nếu muốn thay.` : (hints[type] || '');
         formError.hidden = true;
-        if (usePhoneQr) {
-            const existingQr = previous?.type === 'phone' && previous.inputUrl.startsWith('qr:') ? previous.inputUrl : '';
-            if (!existingQr)
-                urlInput.value = 'qr:new';
-            void requestPhoneQr(existingQr);
-        }
-        if (type === 'webcam') {
-            const selected = previous?.deviceId ?? '';
-            deviceInput.replaceChildren(new Option('Camera mặc định', ''));
-            if (selected)
-                deviceInput.add(new Option('Camera đã chọn', selected));
-            deviceInput.value = selected;
-            void listDevices(selected);
-        }
     }
+    document.querySelectorAll('#cctv-demo-video-presets button[data-demo-url]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            urlInput.value = btn.dataset.demoUrl || '';
+            if (!nameInput.value.trim() && btn.dataset.demoName) {
+                nameInput.value = btn.dataset.demoName;
+            }
+        });
+    });
+    document.querySelector('#cctv-fill-sample-geo')?.addEventListener('click', () => {
+        const idx = (editing ?? 1) - 1;
+        const samples = [
+            { loc: 'Tiểu khu 142 · Đồi Thông Bắc (VQG Bạch Mã)', lat: 16.2015, lon: 107.8520, az: 45 },
+            { loc: 'Chòi Canh Đèo Hải Vân · Đỉnh 2', lat: 16.1890, lon: 108.1310, az: 130 },
+            { loc: 'Khe Rừng Nam · Vùng Đệm', lat: 16.2340, lon: 107.8010, az: 260 },
+        ];
+        const pick = samples[idx % samples.length];
+        if (locationInput) locationInput.value = pick.loc;
+        if (latInput) latInput.value = String(pick.lat);
+        if (lonInput) lonInput.value = String(pick.lon);
+        if (azimuthInput) azimuthInput.value = String(pick.az);
+    });
     async function listDevices(selected) {
         const id = editing;
         const devices = await navigator.mediaDevices?.enumerateDevices().catch(() => []);
@@ -711,16 +821,60 @@
     function openDialog(id) {
         editing = id;
         const source = slots.get(id)?.saved;
+        const defaultPreset = WATCHTOWER_PRESETS[(id - 1) % WATCHTOWER_PRESETS.length];
         get('#cctv-dialog-title').textContent = source ? 'Đổi nguồn giám sát' : 'Thêm nguồn giám sát';
         get('#cctv-dialog-channel').textContent = channel(id);
-        nameInput.value = source?.name ?? '';
-        typeInput.value = source?.type ?? 'video';
-        urlInput.value = source?.inputUrl ?? '';
+        nameInput.value = source?.name ?? (id > 4 ? `${defaultPreset.name} #${id}` : defaultPreset.name);
+        typeInput.value = source?.type ?? 'url';
+        urlInput.value = source?.inputUrl ?? defaultPreset.inputUrl;
+        if (scenarioInput)
+            scenarioInput.value = source?.scenario ?? 'smoke_rise';
+        if (locationInput)
+            locationInput.value = source?.locationName ?? '';
+        if (latInput)
+            latInput.value = source?.lat !== null && source?.lat !== undefined ? String(source.lat) : '';
+        if (lonInput)
+            lonInput.value = source?.lon !== null && source?.lon !== undefined ? String(source.lon) : '';
+        if (azimuthInput)
+            azimuthInput.value = String(source?.azimuth ?? 45);
+        if (roiTopSkyInput)
+            roiTopSkyInput.checked = Boolean(source?.exclusionZones?.some(z => z.label === 'Bầu trời / Mây'));
         submit.disabled = false;
         submit.textContent = 'Lưu nguồn';
         showSourceFields();
         dialog.showModal();
         nameInput.focus();
+    }
+    async function syncStationToServer(saved, signal) {
+        if (!stationsUrl)
+            return saved;
+        const payload = {
+            channel_number: saved.id,
+            source_key: saved.key,
+            name: saved.name,
+            source_type: saved.type,
+            stream_url: saved.inputUrl || '',
+            simulator_scenario: saved.scenario || 'smoke_rise',
+            location_name: saved.locationName || '',
+            latitude: saved.lat ?? '',
+            longitude: saved.lon ?? '',
+            azimuth: saved.azimuth ?? 45,
+            exclusion_zones: saved.exclusionZones || [],
+        };
+        const response = await fetch(stationsUrl, {
+            method: 'POST',
+            headers: { ...headers, 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal,
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.station) {
+            throw new Error(data?.message || 'Không đồng bộ được cấu hình trạm camera.');
+        }
+        saved.stationId = data.station.id;
+        saved.liveFrameUrl = data.station.live_frame_url;
+        saved.exclusionZones = data.station.exclusion_zones || [];
+        return saved;
     }
     async function api(url, body, signal) {
         const response = await fetch(url, { method: 'POST', headers, body, signal });
@@ -732,6 +886,15 @@
         return result;
     }
     async function prepareSource(source, signal) {
+        if (source.type === 'simulator' || source.type === 'rtsp' || source.type === 'http_snapshot') {
+            if (!source.stationId || !source.liveFrameUrl) {
+                await syncStationToServer(source, signal);
+            }
+            return { label: labels[source.type], playback: source.liveFrameUrl, stream: null };
+        }
+        if (source.type === 'hls') {
+            return { label: labels.hls, playback: source.inputUrl, stream: null };
+        }
         if (source.type === 'url' || source.type === 'phone') {
             const body = new FormData();
             body.append('url', source.inputUrl || (source.type === 'phone' ? 'qr:new' : ''));
@@ -792,8 +955,68 @@
             storage = null;
             storageNotice('Trình duyệt đang chặn bộ nhớ cục bộ. Nguồn mới chỉ dùng được trong phiên này.');
         }
-        const priority = { image: 0, video: 0, phone: 0, url: 1, webcam: 2 };
-        const queue = saved.sort((a, b) => priority[a.type] - priority[b.type]).map(source => {
+        let serverStations = [];
+        try {
+            serverStations = JSON.parse(document.querySelector('#cctv-server-stations')?.textContent || '[]');
+        }
+        catch {
+            serverStations = [];
+        }
+        const legacyTypes = new Set(['simulator', 'phone', 'webcam']);
+        const cleanSaved = [];
+        for (const item of saved) {
+            if (legacyTypes.has(item.type)) {
+                void updateStorage(item.id, null).catch(() => { });
+            }
+            else {
+                cleanSaved.push(item);
+            }
+        }
+        saved = cleanSaved;
+        const localById = new Map(saved.map(s => [s.id, s]));
+        for (const st of serverStations) {
+            if (legacyTypes.has(st.source_type))
+                continue;
+            const local = localById.get(st.channel_number);
+            if (local) {
+                local.stationId = st.id;
+                local.liveFrameUrl = st.live_frame_url;
+                local.exclusionZones = st.exclusion_zones || [];
+                local.locationName = st.location_name || '';
+                local.lat = st.latitude;
+                local.lon = st.longitude;
+                local.azimuth = st.azimuth;
+                if (local.type !== 'image' && local.type !== 'video') {
+                    local.type = st.source_type;
+                    local.name = st.name;
+                    local.inputUrl = st.stream_url || '';
+                    if (st.source_key)
+                        local.key = st.source_key;
+                    void updateStorage(local.id, local).catch(() => { });
+                }
+            }
+            else if (['rtsp', 'http_snapshot', 'hls', 'url'].includes(st.source_type)) {
+                saved.push({
+                    id: st.channel_number,
+                    key: st.source_key || newSourceKey(),
+                    type: st.source_type,
+                    name: st.name,
+                    inputUrl: st.stream_url || '',
+                    scenario: st.simulator_scenario || 'smoke_rise',
+                    locationName: st.location_name || '',
+                    lat: st.latitude,
+                    lon: st.longitude,
+                    azimuth: st.azimuth ?? 45,
+                    exclusionZones: st.exclusion_zones || [],
+                    stationId: st.id,
+                    liveFrameUrl: st.live_frame_url,
+                    file: null,
+                    rate: 1,
+                });
+            }
+        }
+        const priority = { image: 0, video: 0, phone: 0, simulator: 0, rtsp: 1, http_snapshot: 1, hls: 1, url: 1, webcam: 2 };
+        const queue = saved.sort((a, b) => (priority[a.type] ?? 1) - (priority[b.type] ?? 1)).map(source => {
             const slot = slots.get(source.id) ?? createSlot(source.id);
             slot.saved = source;
             slot.title.textContent = source.name;
@@ -820,16 +1043,31 @@
         if (id === null || pendingSource)
             return;
         const type = typeInput.value;
-        const inputUrl = type === 'url' || type === 'phone' ? urlInput.value.trim() : '';
+        const usesUrlField = type === 'url' || type === 'phone' || type === 'rtsp' || type === 'http_snapshot' || type === 'hls';
+        const inputUrl = usesUrlField ? urlInput.value.trim() : '';
         const deviceId = type === 'webcam' ? deviceInput.value : '';
+        const scenario = type === 'simulator' ? (scenarioInput?.value || 'smoke_rise') : 'smoke_rise';
+        const locationName = locationInput?.value.trim() || '';
+        const rawLat = latInput?.value.trim() || '';
+        const rawLon = lonInput?.value.trim() || '';
+        const lat = rawLat === '' ? null : Number(rawLat);
+        const lon = rawLon === '' ? null : Number(rawLon);
+        const azimuth = Number(azimuthInput?.value || 45);
+        const exclusionZones = roiTopSkyInput?.checked
+            ? [{ x: 0, y: 0, w: 1, h: 0.28, label: 'Bầu trời / Mây' }]
+            : [];
         const previous = slots.get(id)?.saved;
         const newFile = fileInput.disabled ? null : fileInput.files?.[0] ?? null;
         const file = newFile ?? (previous?.type === type ? previous.file : null);
         const name = nameInput.value.trim() || file?.name.slice(0, 100) || channel(id);
         const sameSource = previous && previous.type === type && previous.inputUrl === inputUrl
-            && (previous.deviceId ?? '') === deviceId && !newFile;
+            && (previous.deviceId ?? '') === deviceId && !newFile
+            && (previous.scenario ?? 'smoke_rise') === scenario;
         const saved = {
             id, key: sameSource ? previous.key : newSourceKey(), type, name, inputUrl, file, deviceId,
+            scenario, locationName, lat, lon, azimuth, exclusionZones,
+            stationId: sameSource ? previous.stationId : undefined,
+            liveFrameUrl: undefined,
             rate: sameSource ? previous.rate : 1, reference: sameSource ? previous.reference : undefined,
         };
         let stream = null;
@@ -841,6 +1079,9 @@
         try {
             if (type === 'image' && file && file.size > 10 * 1024 * 1024) {
                 throw new Error('Ảnh vượt quá 10 MB.');
+            }
+            if (stationsUrl) {
+                await syncStationToServer(saved, operation.signal);
             }
             const media = await prepareSource(saved, operation.signal);
             stream = media.stream;
@@ -963,7 +1204,7 @@
         const video = media instanceof HTMLVideoElement;
         const width = video ? media.videoWidth : media.naturalWidth;
         const height = video ? media.videoHeight : media.naturalHeight;
-        const scale = Math.min(1, 1280 / Math.max(width, height));
+        const scale = Math.min(1, 640 / Math.max(width, height));
         capture.width = Math.max(1, Math.round(width * scale));
         capture.height = Math.max(1, Math.round(height * scale));
         captureContext.drawImage(media, 0, 0, capture.width, capture.height);
@@ -975,7 +1216,7 @@
                     resolve(blob);
                 else
                     reject(new Error('Không đọc được khung hình từ nguồn.'));
-            }, 'image/jpeg', 0.9);
+            }, 'image/jpeg', 0.85);
         });
     }
     function needsScan(slot) {
@@ -990,7 +1231,7 @@
         if (media instanceof HTMLVideoElement) {
             return !media.paused && !media.ended && media.currentTime !== source.lastTime;
         }
-        if (slot.saved?.type === 'phone')
+        if (LIVE_IMG_TYPES.has(slot.saved?.type))
             return !!source.phoneFrame && source.phoneFrame.sequence !== source.lastTime;
         return !source.frame;
     }
@@ -998,8 +1239,20 @@
         if (inFlightCount >= maxConcurrentScans)
             return;
         const ordered = Array.from(slots.values()).sort((a, b) => a.id - b.id);
-        const candidates = ordered.filter(slot => slot.id > lastSlot).concat(ordered.filter(slot => slot.id <= lastSlot));
-        const slot = candidates.find(item => item.manual && needsScan(item)) ?? candidates.find(needsScan);
+        const activeCount = ordered.filter(item => item.source?.started && ready(item.source)).length;
+        const eligible = ordered.filter(needsScan);
+        if (!eligible.length)
+            return;
+        // Multi-screen priority scheduler:
+        // 1. Manual scan clicked by user
+        // 2. Screens never scanned yet (!source.frame) so all tiles get initial AI overlay fast
+        // 3. Screens that have not triggered an alert yet (!eventCount && !captureCount && !source.frame?.alert)
+        // 4. Fair round-robin sorted by oldest lastScanCompletedAt
+        const slot = eligible.find(item => item.manual)
+            ?? eligible.find(item => !item.source?.frame)
+            ?? eligible.filter(item => !item.eventCount && !item.captureCount && !item.source?.frame?.alert)
+                .sort((a, b) => (a.source?.lastScanCompletedAt || 0) - (b.source?.lastScanCompletedAt || 0))[0]
+            ?? eligible.sort((a, b) => (a.source?.lastScanCompletedAt || 0) - (b.source?.lastScanCompletedAt || 0))[0];
         const source = slot?.source;
         const saved = slot?.saved;
         if (!slot || !source || !saved)
@@ -1017,7 +1270,7 @@
         const mediaTime = phoneFrame?.sequence ?? (media instanceof HTMLVideoElement ? media.currentTime : 0);
         const moving = (phoneFrame !== null || media instanceof HTMLVideoElement && !media.paused)
             && mediaTime !== source.lastTime;
-        if (media instanceof HTMLVideoElement) {
+        if (media instanceof HTMLVideoElement && !source.isWatchtowerStream && !(preserveReplayToggle?.checked)) {
             const isAtBeginning = mediaTime <= 2.0;
             const rewoundToBeginning = (source.maxSeenPosition || 0) > 3.0 && isAtBeginning;
             if (rewoundToBeginning || (isAtBeginning && !source.runCleaned)) {
@@ -1041,6 +1294,14 @@
             body.append('source_key', saved.key);
             body.append('source_kind', saved.type);
             body.append('moving', moving ? '1' : '0');
+            if (preserveReplayToggle)
+                body.append('preserve_replay', preserveReplayToggle.checked ? '1' : '0');
+            else if (source.isWatchtowerStream)
+                body.append('preserve_replay', '1');
+            if (saved.stationId)
+                body.append('station_id', saved.stationId);
+            if (saved.exclusionZones?.length)
+                body.append('exclusion_zones', JSON.stringify(saved.exclusionZones));
             if (referenceEnabled && saved.reference)
                 body.append('reference', saved.reference, 'reference.jpg');
             if (saved.type === 'video' || saved.type === 'url')
@@ -1054,8 +1315,13 @@
                 return;
             source.lastTime = mediaTime;
             source.overlayTime = media instanceof HTMLVideoElement ? media.currentTime : mediaTime;
+            source.lastScanCompletedAt = performance.now();
             source.frame = result;
-            source.nextScan = performance.now();
+            const othersWaitingInitial = ordered.some(s => s.id !== slot.id && s.source?.started && (!s.source.frame || (!s.eventCount && !s.captureCount && !s.source.frame?.alert)));
+            const adaptiveCooldown = othersWaitingInitial
+                ? Math.max(3000, activeCount * 1100)
+                : Math.max(2200, activeCount * 650);
+            source.nextScan = performance.now() + (LIVE_IMG_TYPES.has(saved.type) ? 2500 : (source.isWatchtowerStream ? adaptiveCooldown : Math.min(1800, adaptiveCooldown)));
             if (result.event) {
                 slot.evidence.href = result.event.url;
                 slot.evidence.hidden = false;
@@ -1080,9 +1346,11 @@
             }
             const coverage = result.detections[0]?.mask_coverage;
             const confidence = Math.max(0, ...result.detections.map(detection => detection.confidence ?? 0));
-            const location = media instanceof HTMLVideoElement && saved.type !== 'webcam'
+            const location = media instanceof HTMLVideoElement && saved.type !== 'webcam' && saved.type !== 'hls'
                 ? ` · giây ${mediaTime.toLocaleString('vi-VN', { maximumFractionDigits: 1 })}` : '';
-            const summary = result.alert ? 'Có dấu hiệu khói' : result.has_smoke ? 'Dưới ngưỡng lưu' : 'Chưa ghi nhận khói';
+            const summary = result.suspected
+                ? `Nghi vấn (${result.streak}/${result.required_streak})`
+                : result.alert ? 'Có dấu hiệu khói' : result.has_smoke ? 'Dưới ngưỡng lưu' : 'Chưa ghi nhận khói';
             slot.detail.textContent = `Lần quét gần nhất${location} · ${summary} · ${result.elapsed_ms} ms`;
             if (coverage !== undefined)
                 slot.detail.append(` · vùng khói ${coverage}%`);
@@ -1183,7 +1451,7 @@
         const pos = cap.position !== null && cap.position !== undefined
             ? `Giây ${Number(cap.position).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} · `
             : '';
-        sub.textContent = `${pos}Vùng khói ${Math.round((cap.score || 0) * 1000) / 10}% · ${cap.elapsed_ms || 0} ms`;
+        sub.textContent = `${pos}Vùng khói ${Math.round((cap.score || 0) * 10) / 10}% · ${cap.elapsed_ms || 0} ms`;
         const links = document.createElement('div');
         links.className = 'cctv-capture-links';
         if (cap.event_url) {
@@ -1302,7 +1570,7 @@
     modeAnnotatedBtn?.addEventListener('click', () => setReportViewMode('annotated'));
     modeOriginalBtn?.addEventListener('click', () => setReportViewMode('original'));
     typeInput.addEventListener('change', showSourceFields);
-    findDevices.addEventListener('click', async () => {
+    findDevices?.addEventListener('click', async () => {
         findDevices.disabled = true;
         formError.hidden = true;
         try {
@@ -1339,6 +1607,50 @@
         const id = empty?.id ?? free;
         if (id !== undefined)
             openDialog(id);
+    });
+    const loadRealDemosBtn = document.querySelector('#cctv-load-real-demos');
+    loadRealDemosBtn?.addEventListener('click', async () => {
+        loadRealDemosBtn.disabled = true;
+        const origLabel = loadRealDemosBtn.textContent;
+        loadRealDemosBtn.textContent = '⏳ Đang kết nối 4 Camera Chòi Canh…';
+        const watchtowerPresets = [
+            { id: 1, name: 'Trạm Chòi Canh Bắc', inputUrl: 'https://www.youtube.com/watch?v=wSp-pUDcFQI' },
+            { id: 2, name: 'Trạm Đồi Thông Đông', inputUrl: 'https://www.youtube.com/watch?v=RWoYegPgRF4' },
+            { id: 3, name: 'Trạm Quan Trắc Nam', inputUrl: 'https://www.youtube.com/watch?v=TtUgnRqARUE' },
+            { id: 4, name: 'Trạm Đỉnh Đèo Tây', inputUrl: 'https://www.youtube.com/watch?v=FZNDqZJvc5w' },
+        ];
+        try {
+            for (const preset of watchtowerPresets) {
+                const slot = slots.get(preset.id) ?? createSlot(preset.id);
+                const prev = slot.saved;
+                const saved = {
+                    id: preset.id,
+                    key: (prev && prev.inputUrl === preset.inputUrl) ? prev.key : newSourceKey(),
+                    type: 'url',
+                    name: preset.name,
+                    inputUrl: preset.inputUrl,
+                    file: null,
+                    deviceId: '',
+                    scenario: 'smoke_rise',
+                    locationName: '',
+                    lat: null,
+                    lon: null,
+                    azimuth: 45,
+                    exclusionZones: [],
+                    rate: 1,
+                };
+                if (stationsUrl) {
+                    await syncStationToServer(saved).catch(() => { });
+                }
+                await updateStorage(preset.id, saved).catch(() => { });
+                const media = await prepareSource(saved);
+                mountSource(slot, saved, media.label, media.playback, media.stream);
+            }
+        }
+        finally {
+            loadRealDemosBtn.disabled = false;
+            loadRealDemosBtn.textContent = origLabel;
+        }
     });
     auto.addEventListener('click', () => {
         autoEnabled = !autoEnabled;
@@ -1381,6 +1693,12 @@
     });
     get('#cctv-dismiss-incident').addEventListener('click', () => {
         get('#cctv-incident-banner').hidden = true;
+    });
+    document.querySelector('#cctv-clear-log')?.addEventListener('click', () => {
+        eventRows.clear();
+        log.replaceChildren();
+        const emptyEl = document.querySelector('#cctv-log-empty');
+        if (emptyEl) emptyEl.hidden = false;
     });
     const notify = get('#cctv-notify');
     const notificationState = get('#cctv-notification-state');

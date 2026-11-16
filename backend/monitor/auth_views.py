@@ -2,9 +2,15 @@ import logging
 import secrets
 from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth import get_user_model, login, logout as auth_logout
+from django.contrib.auth import (
+    get_user_model,
+    login,
+    logout as auth_logout,
+    update_session_auth_hash,
+)
+from django.contrib.auth.decorators import login_required
 from django.shortcuts import redirect, render
-from .forms import RegisterForm
+from .forms import RegisterForm, SetPasswordForGoogleForm
 from .oauth import (
     exchange_code_for_tokens,
     fetch_google_user_info,
@@ -33,7 +39,7 @@ def register(request):
                 email=email,
                 password=password,
             )
-            login(request, user, backend='django.contrib.auth.backends.ModelBackend')
+            login(request, user, backend='monitor.auth_backend.EmailOrUsernameModelBackend')
             messages.success(
                 request,
                 f'Đăng ký tài khoản thành công! Chào mừng {user.username} đến với ForestWatch.'
@@ -97,9 +103,18 @@ def google_callback(request):
 
         user_info = fetch_google_user_info(access_token)
         user, created = get_or_create_google_user(user_info)
-        login(request, user, backend='django.contrib.auth.backends.ModelBackend')
+        login(request, user, backend='monitor.auth_backend.EmailOrUsernameModelBackend')
 
-        action = 'Tạo tài khoản mới và đăng nhập' if created else 'Đăng nhập'
+        # If user was just created or doesn't have a usable password yet, prompt password creation
+        if created or not user.has_usable_password():
+            messages.success(
+                request,
+                f'Đăng nhập tài khoản Google ({user.email}) thành công! '
+                f'Vui lòng thiết lập mật khẩu để lần sau có thể đăng nhập linh hoạt bằng tài khoản Google hoặc mật khẩu.'
+            )
+            return redirect('google_set_password')
+
+        action = 'Đăng nhập'
         messages.success(
             request,
             f'{action} thành công với tài khoản Google ({user.email})!'
@@ -113,6 +128,50 @@ def google_callback(request):
         logger.exception('Lỗi trong quá trình xử lý Google OAuth callback')
         messages.error(request, f'Đăng nhập Google thất bại: {exc}')
         return redirect('login')
+
+
+@login_required
+def google_set_password(request):
+    """
+    Allow users signed in via Google to create/set a password for their account.
+    Once created, they can log in via Google OAuth OR directly by typing their username/email + password.
+    """
+    next_url = request.session.get('google_oauth_next') or settings.LOGIN_REDIRECT_URL
+    if not next_url.startswith('/'):
+        next_url = settings.LOGIN_REDIRECT_URL
+
+    if request.method == 'POST':
+        if 'skip' in request.POST:
+            request.session.pop('google_oauth_next', None)
+            messages.info(
+                request,
+                'Bạn đã bỏ qua bước tạo mật khẩu. Bạn vẫn có thể đăng nhập bằng Google hoặc thiết lập mật khẩu sau.'
+            )
+            return redirect(next_url)
+
+        form = SetPasswordForGoogleForm(request.POST)
+        if form.is_valid():
+            new_password = form.cleaned_data['password']
+            user = request.user
+            user.set_password(new_password)
+            user.save()
+            update_session_auth_hash(request, user)
+            request.session.pop('google_oauth_next', None)
+            messages.success(
+                request,
+                f'Thiết lập mật khẩu thành công! Từ bây giờ, bạn có thể đăng nhập bằng tài khoản Google '
+                f'hoặc nhập trực tiếp Tên đăng nhập ({user.username}) / Email ({user.email}) cùng mật khẩu vừa tạo.'
+            )
+            return redirect(next_url)
+    else:
+        form = SetPasswordForGoogleForm()
+
+    return render(request, 'registration/set_password.html', {
+        'form': form,
+        'user': request.user,
+        'has_password': request.user.has_usable_password(),
+        'next_url': next_url,
+    })
 
 
 def logout_view(request):

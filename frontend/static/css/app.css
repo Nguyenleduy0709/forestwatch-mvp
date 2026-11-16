@@ -181,13 +181,14 @@ p {
 .header nav {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 6px;
   font-size: 13px;
   font-weight: 500;
 }
 
 .header nav a {
-  padding: 8px 16px;
+  padding: 7px 13px;
   border-radius: 20px;
   color: var(--ink-dim);
   transition: all 0.2s ease;
@@ -195,6 +196,7 @@ p {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
 }
 
 .header nav a:hover {

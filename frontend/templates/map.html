@@ -1,0 +1,177 @@
+{% extends 'base.html' %}
+{% load static l10n %}
+{% block title %}Bản đồ Trạm Camera & Nguy cơ Cháy rừng — ForestWatch{% endblock %}
+{% block body_class %}cctv-page{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{% static 'css/control-room.css' %}?v=20261116b">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin="" defer></script>
+<script src="{% static 'js/camera-map.js' %}?v=20261116b" defer></script>
+<style>
+  .fw-map-grid {
+    display: grid;
+    grid-template-columns: 1.45fr 1fr;
+    gap: 20px;
+    align-items: start;
+  }
+  .fw-map-box {
+    height: 540px;
+    border-radius: 10px;
+    border: 1px solid var(--cctv-line);
+    background: #060b08;
+    overflow: hidden;
+    position: relative;
+  }
+  .fw-map-station-card {
+    background: var(--cctv-panel-alt);
+    border: 1px solid var(--cctv-line);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .fw-map-station-card[data-status="ALERTING"] {
+    border-color: rgba(239, 68, 68, 0.7);
+    box-shadow: 0 0 14px rgba(239, 68, 68, 0.25);
+  }
+  .fw-map-station-card small {
+    display: block;
+    color: var(--cctv-muted);
+    margin-top: 4px;
+    font-family: var(--font-mono);
+  }
+  .fw-form-row-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  @media (max-width: 980px) {
+    .fw-map-grid { grid-template-columns: 1fr; }
+    .fw-map-box { height: 380px; }
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<main class="cctv-control-center" id="fw-map-page"
+      data-csrf="{{ csrf_token }}"
+      data-stations-url="{% url 'stations_api' %}"
+      data-weather-url="{% url 'weather_risk_api' %}"
+      data-center-lat="{{ center_lat|unlocalize }}"
+      data-center-lon="{{ center_lon|unlocalize }}">
+
+  <header class="cctv-heading">
+    <div>
+      <div class="cctv-kicker"><i></i> FORESTWATCH / GIS COMMAND & FIRE WEATHER</div>
+      <h1>Bản đồ Trạm Camera & Nguy cơ Cháy rừng</h1>
+      <p>Định vị tọa độ từng tháp/camera, hướng quan sát (FOV), chỉ đường tới điểm cháy và theo dõi gió/độ ẩm thời gian thực.</p>
+    </div>
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <button type="button" class="cctv-btn" id="fw-seed-demo-stations">✨ Nạp nhanh 3 Trạm Rừng Mẫu (Demo)</button>
+      <a class="cctv-btn" href="{% url 'control_room' %}">← Về Phòng giám sát</a>
+      <a class="cctv-btn cctv-primary" href="{% url 'settings' %}">⚙ Cấu hình cảnh báo</a>
+    </div>
+  </header>
+
+  <section class="cctv-stats" style="grid-template-columns: repeat(4, minmax(0, 1fr));" aria-label="Thời tiết & Nguy cơ cháy rừng">
+    <div>
+      <span>Nhiệt độ khu vực</span>
+      <strong id="weather-temp">{{ weather.temperature_c }} °C</strong>
+      <small>{{ weather.source }}</small>
+    </div>
+    <div>
+      <span>Độ ẩm không khí</span>
+      <strong id="weather-hum">{{ weather.humidity_pct }}%</strong>
+      <small>Độ ẩm &lt; 45% làm vật liệu cháy dễ bén</small>
+    </div>
+    <div>
+      <span>Tốc độ & Hướng gió</span>
+      <strong id="weather-wind">{{ weather.wind_speed_kmh }} km/h · {{ weather.wind_direction_deg }}°</strong>
+      <small>Dự báo hướng khói và đám cháy lan</small>
+    </div>
+    <div>
+      <span>Cấp dự báo cháy rừng</span>
+      <strong id="weather-risk" class="{% if weather.severity == 'danger' %}text-fire{% elif weather.severity == 'warning' %}cctv-accent{% else %}cctv-accent{% endif %}">{{ weather.danger_label }}</strong>
+      <small>Chỉ số FFDI: {{ weather.fire_index }}</small>
+    </div>
+  </section>
+
+  <div class="fw-map-grid">
+    <section class="panel" style="padding:16px;">
+      <div class="panel-heading" style="margin-bottom:12px;">
+        <h2>Bản đồ vị trí & Góc quét Camera</h2>
+        <span>NHẤP LÊN BẢN ĐỒ ĐỂ LẤY TỌA ĐỘ GPS</span>
+      </div>
+      <div id="fw-leaflet-map" class="fw-map-box">
+        <div id="fw-map-offline" hidden style="padding:32px;text-align:center;">
+          <h3>Đang chờ thư viện bản đồ trực tuyến</h3>
+          <p>Nếu mạng nội bộ không truy cập được bản đồ nền vệ tinh, bạn vẫn có thể quản lý tọa độ GPS trạm camera và xuất liên kết Google Maps ở bảng bên phải.</p>
+        </div>
+      </div>
+    </section>
+
+    <aside style="display:flex; flex-direction:column; gap:20px;">
+      <section class="panel" style="padding:20px;">
+        <div class="panel-heading" style="margin-bottom:14px;">
+          <h2>Gắn tọa độ Trạm Camera</h2>
+          <span>LƯU TRÊN SERVER</span>
+        </div>
+        <form id="fw-geo-form">
+          <div class="fw-form-row-2">
+            <div>
+              <label for="geo-channel">Kênh (1 - 10)</label>
+              <select id="geo-channel">
+                {% for i in "123456789"|make_list %}
+                  <option value="{{ forloop.counter }}">CAM 0{{ forloop.counter }}</option>
+                {% endfor %}
+                <option value="10">CAM 10</option>
+              </select>
+            </div>
+            <div>
+              <label for="geo-name">Tên trạm camera</label>
+              <input id="geo-name" type="text" placeholder="VD: Chòi Canh Rừng Bắc" maxlength="100">
+            </div>
+          </div>
+
+          <label for="geo-location">Khu vực / Tiểu khu / Địa chỉ</label>
+          <input id="geo-location" type="text" placeholder="VD: Tiểu khu 142 · Vườn Quốc gia Bạch Mã" maxlength="150">
+
+          <div class="fw-form-row-2">
+            <div>
+              <label for="geo-lat">Vĩ độ (Latitude)</label>
+              <input id="geo-lat" type="number" step="0.000001" placeholder="16.200000">
+            </div>
+            <div>
+              <label for="geo-lon">Kinh độ (Longitude)</label>
+              <input id="geo-lon" type="number" step="0.000001" placeholder="107.850000">
+            </div>
+          </div>
+
+          <div class="fw-form-row-2">
+            <div>
+              <label for="geo-azimuth">Hướng nhìn (0°=Bắc, 90°=Đông)</label>
+              <input id="geo-azimuth" type="number" min="0" max="360" value="45">
+            </div>
+            <div>
+              <label for="geo-range">Tầm quan sát (km)</label>
+              <input id="geo-range" type="number" min="0.2" max="50" step="0.5" value="5">
+            </div>
+          </div>
+
+          <p id="geo-save-msg" hidden style="margin:12px 0 0; font-size:12px; color:#34d399;"></p>
+          <button type="submit" class="button full" style="margin-top:14px;">Lưu vị trí lên bản đồ ↗</button>
+        </form>
+      </section>
+
+      <section class="panel" style="padding:20px;">
+        <div class="panel-heading" style="margin-bottom:14px;">
+          <h2>Danh sách Trạm Camera ({{ stations|length }})</h2>
+          <span>TRẠNG THÁI & CHỈ ĐƯỜNG</span>
+        </div>
+        <div id="fw-station-list" style="max-height:360px; overflow-y:auto;"></div>
+      </section>
+    </aside>
+  </div>
+</main>
+{{ stations|json_script:"fw-stations-json" }}
+{% endblock %}
