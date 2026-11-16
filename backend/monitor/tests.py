@@ -196,6 +196,23 @@ class WorkflowTests(TestCase):
             res = self.client.get(reverse('google_login'))
             self.assertRedirects(res, reverse('login'))
 
+    def test_google_button_hidden_until_configured(self):
+        self.client.logout()
+        with override_settings(GOOGLE_CLIENT_ID='', GOOGLE_CLIENT_SECRET=''):
+            for name in ('login', 'register'):
+                self.assertNotContains(self.client.get(reverse(name)), 'button-google')
+        with override_settings(GOOGLE_CLIENT_ID='id.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET='secret'):
+            for name in ('login', 'register'):
+                self.assertContains(self.client.get(reverse(name)), 'button-google')
+
+    def test_history_shows_vietnamese_status(self):
+        self.upload()
+        alert = Alert.objects.get()
+        self.client.post(reverse('transition', args=[alert.pk]), {'status': 'REJECTED'})
+        page = self.client.get(reverse('detail', args=[alert.analysis.pk]))
+        self.assertContains(page, 'Chờ xác minh → Đã từ chối')
+        self.assertNotContains(page, 'PENDING → REJECTED')
+
     def test_google_login_redirect_when_configured(self):
         self.client.logout()
         with override_settings(
