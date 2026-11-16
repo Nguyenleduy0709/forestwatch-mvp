@@ -167,6 +167,18 @@ class AlertHistory(models.Model):
     class Meta:
         ordering = ['created_at']
 
+    @staticmethod
+    def _label(value):
+        return dict(Alert.Status.choices).get(value, value)
+
+    @property
+    def old_status_label(self):
+        return self._label(self.old_status)
+
+    @property
+    def new_status_label(self):
+        return self._label(self.new_status)
+
 
 class SmokeEvent(models.Model):
     alert = models.OneToOneField(Alert, on_delete=models.CASCADE, related_name='smoke_event')

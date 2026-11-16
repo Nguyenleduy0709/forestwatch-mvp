@@ -116,13 +116,13 @@
                   {% if cap.alert %}
                     <span class="cctv-alert-tag" data-status="{{ cap.alert.status }}">{{ cap.alert.get_status_display }}</span>
                   {% endif %}
-                  <span class="cctv-alert-tag cctv-smoke-score-tag">Khói · {% widthratio cap.confidence 1 100 %}%</span>
+                  <span class="cctv-alert-tag cctv-smoke-score-tag" title="Phản hồi cao nhất của mô hình">Khói · đỉnh {% widthratio cap.confidence 1 100 %}%</span>
                   {% if cap.position is not None %}
                     <span class="cctv-alert-tag">Giây {{ cap.position|floatformat:1 }}</span>
                   {% endif %}
                 </div>
                 <h2>{{ cap.source }}</h2>
-                <p>Vùng khói {{ cap.score|floatformat:1 }}% · Độ tin cậy {% widthratio cap.confidence 1 100 %}% · Thời gian quét {{ cap.elapsed_ms }} ms</p>
+                <p>Vùng khói {{ cap.score|floatformat:1 }}% · Phản hồi cao nhất {% widthratio cap.confidence 1 100 %}% · Thời gian quét {{ cap.elapsed_ms }} ms</p>
                 <div class="cctv-alert-actions">
                   <div class="cctv-alert-links">
                     {% if cap.alert_id %}
