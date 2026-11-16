@@ -90,7 +90,8 @@
 .cctv-toolbar h2, .cctv-log-heading h2, .cctv-dialog h2 { font-size: 19px; margin: 0; letter-spacing: -.025em; }
 .cctv-toolbar p { margin: 3px 0 0; font-size: 11px; }
 .cctv-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.cctv-layout { display: flex; gap: 2px; padding: 3px; background: var(--cctv-panel); border: 1px solid var(--cctv-line); border-radius: 7px; }
+.cctv-layout { display: flex; align-items: center; gap: 2px; padding: 3px; background: var(--cctv-panel); border: 1px solid var(--cctv-line); border-radius: 7px; }
+.cctv-layout-label { padding: 0 6px 0 5px; font-size: 12px; color: var(--cctv-muted, #9aa59c); white-space: nowrap; }
 .cctv-layout button, .cctv-icon {
   border: 0;
   border-radius: 4px;
