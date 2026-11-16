@@ -11,7 +11,10 @@
       <h1>Cảnh báo & Lịch sử quét theo màn hình</h1>
       <p>Mỗi màn hình giám sát có khu vực lưu trữ riêng biệt — mọi lần quét phát hiện khói đều được chụp và lưu lại đầy đủ.</p>
     </div>
-    <a class="cctv-btn" href="{% url 'control_room' %}">← Quay lại Phòng giám sát</a>
+    <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+      <a class="cctv-btn" href="{% url 'export_alerts_csv' %}{% if selected_source or status %}?{% if selected_source %}source={{ selected_source|urlencode }}{% endif %}{% if selected_source and status %}&amp;{% endif %}{% if status %}status={{ status|urlencode }}{% endif %}{% endif %}">📥 Xuất báo cáo CSV</a>
+      <a class="cctv-btn" href="{% url 'control_room' %}">← Quay lại Phòng giám sát</a>
+    </div>
   </header>
 
   <section class="cctv-screen-switcher" aria-label="Chọn màn hình giám sát">

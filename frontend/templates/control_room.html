@@ -3,14 +3,16 @@
 {% block title %}Phòng giám sát khói — ForestWatch{% endblock %}
 {% block body_class %}cctv-page{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="{% static 'css/control-room.css' %}">
-<script src="{% static 'js/control-room.js' %}" defer></script>
+<link rel="stylesheet" href="{% static 'css/control-room.css' %}?v=20261116d">
+<script src="{% static 'js/control-room.js' %}?v=20261116d" defer></script>
 {% endblock %}
 
 {% block content %}
 <main class="cctv-control-center" id="cctv-room"
       data-account="{{ request.user.pk }}" data-csrf="{{ csrf_token }}" data-reference="{{ reference_enabled|yesno:'1,0' }}"
       data-scan="{% url 'scan_frame' %}" data-screen-reports="{% url 'screen_reports_api' %}"
+      data-stations-url="{% url 'stations_api' %}"
+      data-preserve-replay="{{ profile.preserve_replay_history|yesno:'1,0' }}"
       data-resolve="{% url 'resolve_video' %}" data-resolve-phone="{% url 'resolve_phone_camera' %}"
       data-phone-qr="{% url 'create_phone_qr' %}">
   <header class="cctv-heading">
@@ -50,6 +52,8 @@
             <button type="button" data-cols="4" aria-label="4 cột" aria-pressed="false">4</button>
             <button type="button" data-cols="5" aria-label="5 cột" aria-pressed="false">5</button>
           </div>
+          <button type="button" class="cctv-btn" id="cctv-load-real-demos" title="Mở đồng thời 4 luồng Camera Chòi Canh Rừng thực tế (720p HD) để trình diễn">🎬 Nạp 4 Camera Chòi Canh Thực Tế</button>
+          <a class="cctv-btn" href="{% url 'settings' %}" title="Cài đặt lọc báo giả đa khung và gửi Telegram/Email">⚙ Cấu hình</a>
           <button type="button" class="cctv-btn" id="cctv-auto" aria-pressed="true">Tạm dừng quét</button>
           <button type="button" class="cctv-btn cctv-primary" id="cctv-add"><span aria-hidden="true">＋</span> Thêm nguồn</button>
         </div>
@@ -92,6 +96,7 @@
   </div>
 </main>
 {{ recent_events|json_script:"cctv-recent-events" }}
+{{ server_stations|json_script:"cctv-server-stations" }}
 
 <template id="cctv-card-template">
   <article class="cctv-card" data-state="empty">
@@ -118,7 +123,6 @@
           <option value="1" selected>1×</option>
         </select>
       </label>
-      <button type="button" class="cctv-btn cctv-phone-qr-btn" hidden>📱 Mã QR</button>
       <button type="button" class="cctv-btn cctv-screen-alerts-btn" hidden>🔔 Xem cảnh báo (<span class="cctv-screen-alerts-count">0</span>)</button>
       <button type="button" class="cctv-btn cctv-scan" hidden>Quét ngay</button>
       <button type="button" class="cctv-btn cctv-primary cctv-start" hidden>Bắt đầu quét</button>
@@ -143,38 +147,31 @@
       <input id="cctv-source-name" type="text" maxlength="100" placeholder="Ví dụ: Đồi thông phía Bắc">
       <label for="cctv-source-type">Loại nguồn</label>
       <select id="cctv-source-type">
-        <option value="video">Tệp video từ máy</option>
-        <option value="url">YouTube hoặc liên kết video</option>
-        <option value="image">Ảnh tĩnh từ máy</option>
-        <option value="phone">Camera điện thoại (Quét mã QR)</option>
-        <option value="webcam">Webcam hoặc camera USB</option>
+        <option value="url" selected>📡 Camera Chòi Canh Rừng / YouTube / MP4</option>
+        <option value="video">🎥 Tệp video từ máy</option>
+        <option value="rtsp">🌐 Camera IP RTSP (Hikvision / Dahua / ONVIF)</option>
+        <option value="hls">📺 Luồng trực tiếp HLS (.m3u8)</option>
+        <option value="image">🖼 Ảnh tĩnh từ máy</option>
       </select>
-      <div id="cctv-file-field">
+      <div id="cctv-file-field" hidden>
         <label for="cctv-source-file" id="cctv-file-label">Chọn tệp</label>
-        <input id="cctv-source-file" type="file" required>
+        <input id="cctv-source-file" type="file" disabled>
       </div>
-      <div id="cctv-url-field" hidden>
-        <label for="cctv-source-url" id="cctv-url-label">Liên kết video công khai</label>
-        <input id="cctv-source-url" type="text" maxlength="2048" placeholder="https://…" disabled>
-      </div>
-      <div id="cctv-phone-qr-field" class="cctv-phone-qr-box" hidden>
-        <div class="cctv-qr-header">
-          <strong>📱 Quét mã QR bằng điện thoại để truyền Camera trực tiếp</strong>
-          <span>Điện thoại và máy tính kết nối cùng mạng Wi-Fi</span>
-        </div>
-        <div class="cctv-qr-preview" id="cctv-phone-qr-svg">
-          <span>Đang tạo mã QR…</span>
-        </div>
-        <div class="cctv-qr-link-row">
-          <input type="text" id="cctv-phone-share-url" readonly value="" aria-label="Đường dẫn chia sẻ camera điện thoại">
-          <button type="button" class="cctv-btn" id="cctv-copy-phone-url">Sao chép link</button>
+      <div id="cctv-url-field">
+        <label for="cctv-source-url" id="cctv-url-label">Liên kết nguồn hình</label>
+        <input id="cctv-source-url" type="text" maxlength="1000" placeholder="https://… hoặc rtsp://user:pass@ip:554/stream1">
+        <div id="cctv-demo-video-presets" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;">
+          <span style="font-size:11px; color:var(--cctv-muted); width:100%;">🔥 Chọn nhanh luồng Camera Chòi Canh Rừng thực tế (720p HD đã tải sẵn):</span>
+          <button type="button" class="cctv-btn" data-demo-url="https://www.youtube.com/watch?v=wSp-pUDcFQI" data-demo-name="Trạm Chòi Canh Bắc">🌲 Trạm Bắc · Windy Fire</button>
+          <button type="button" class="cctv-btn" data-demo-url="https://www.youtube.com/watch?v=RWoYegPgRF4" data-demo-name="Trạm Đồi Thông Đông">🌲 Trạm Đông · Dixie Fire</button>
+          <button type="button" class="cctv-btn" data-demo-url="https://www.youtube.com/watch?v=TtUgnRqARUE" data-demo-name="Trạm Quan Trắc Nam">🌲 Trạm Nam · Coyote Fire</button>
+          <button type="button" class="cctv-btn" data-demo-url="https://www.youtube.com/watch?v=FZNDqZJvc5w" data-demo-name="Trạm Đỉnh Đèo Tây">🌲 Trạm Tây · Borel Fire</button>
         </div>
       </div>
-      <div id="cctv-device-field" hidden>
-        <label for="cctv-source-device">Camera trên máy tính</label>
-        <select id="cctv-source-device"><option value="">Camera mặc định</option></select>
-        <button type="button" class="cctv-btn cctv-list-devices" id="cctv-find-devices">Lấy danh sách camera</button>
-      </div>
+      <label style="display:flex; align-items:center; gap:8px; text-transform:none; margin-top:14px; padding:10px 12px; border:1px solid var(--cctv-line); border-radius:8px; background:rgba(14,23,19,0.5); cursor:pointer; color:var(--cctv-text);">
+        <input type="checkbox" id="cctv-roi-top-sky" style="width:auto; margin:0; accent-color:#38bdf8;">
+        <span>🚫 Loại trừ 28% vùng bầu trời phía trên (Chống báo giả do mây / sương mù)</span>
+      </label>
       <p class="cctv-help" id="cctv-source-help"></p>
       <p class="cctv-form-error" id="cctv-form-error" role="alert" hidden></p>
     </div>

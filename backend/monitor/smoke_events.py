@@ -139,19 +139,44 @@ def purge_source_alerts(owner, source=None, key=None):
         return count
 
 
-def track_smoke(*, owner, source, key, kind, position, moving, mode, model_name, detections, images, elapsed_ms, video_replayed=False):
+def track_smoke(
+    *,
+    owner,
+    source,
+    key,
+    kind,
+    position,
+    moving,
+    mode,
+    model_name,
+    detections,
+    images,
+    elapsed_ms,
+    video_replayed=False,
+    station=None,
+    preserve_replay_history=False,
+    min_capture_interval_seconds=0,
+):
     if not detections and not moving:
         return None, False
     # A concurrent first frame may insert the open event before this request does.
     for attempt in range(2):
         try:
-            return _track_smoke(owner, source, key, kind, position, moving, mode, model_name, detections, images, elapsed_ms, video_replayed=video_replayed)
+            return _track_smoke(
+                owner, source, key, kind, position, moving, mode, model_name, detections, images, elapsed_ms,
+                video_replayed=video_replayed, station=station,
+                preserve_replay_history=preserve_replay_history,
+                min_capture_interval_seconds=min_capture_interval_seconds,
+            )
         except IntegrityError:
             if attempt or not SmokeEvent.objects.filter(source_key=key, closed=False).exists():
                 raise
 
 
-def _track_smoke(owner, source, key, kind, position, moving, mode, model_name, detections, images, elapsed_ms, video_replayed=False):
+def _track_smoke(
+    owner, source, key, kind, position, moving, mode, model_name, detections, images, elapsed_ms,
+    video_replayed=False, station=None, preserve_replay_history=False, min_capture_interval_seconds=0,
+):
     now = timezone.now()
     written = []
     replaced = []
@@ -164,9 +189,10 @@ def _track_smoke(owner, source, key, kind, position, moving, mode, model_name, d
             current.filter(stale | changed_model).update(closed=True)
             event = current.select_for_update().first()
 
-            # If video replayed or rewound from a later point back to beginning, automatically purge old alerts of this video
-            replayed = video_replayed
-            if not replayed and kind in ('video', 'url') and position is not None:
+            # Only replay-purge test videos when preserve_replay_history is False; never silently purge live feeds.
+            is_clip_source = kind in ('video', 'url')
+            replayed = bool(video_replayed) and not preserve_replay_history and is_clip_source
+            if not preserve_replay_history and not replayed and is_clip_source and position is not None:
                 if position <= 1.5:
                     if event and ((event.peak_position is not None and event.peak_position > 2.5) or event.positive_samples > 1):
                         replayed = True
@@ -191,13 +217,13 @@ def _track_smoke(owner, source, key, kind, position, moving, mode, model_name, d
             score = max(float(d.get('mask_coverage', d.get('confidence')) or 0) for d in detections)
             confidence = max(float(d.get('confidence') or 0) for d in detections)
             if event is None:
-                run = Analysis(owner=owner, source=source, mode=mode, model_name=model_name,
+                run = Analysis(owner=owner, station=station, source=source, mode=mode, model_name=model_name,
                                detections=detections, elapsed_ms=elapsed_ms)
                 save_pair(run, 'original', 'annotated', images, written)
                 run.save()
                 alert = Alert.objects.create(analysis=run)
                 event = SmokeEvent.objects.create(
-                    alert=alert, source_key=key, source_kind=kind, first_position=position,
+                    alert=alert, station=station, source_key=key, source_kind=kind, first_position=position,
                     last_seen=now, peak_score=score,
                 )
                 capture = _create_capture(
@@ -209,9 +235,15 @@ def _track_smoke(owner, source, key, kind, position, moving, mode, model_name, d
                 summary['latest_capture'] = capture_summary(capture)
                 return summary, True
 
+            if station and not event.station_id:
+                event.station = station
             event.last_seen = now
             event.clear_samples = 0
             latest_capture = None
+            changed = ['last_seen', 'clear_samples', 'positive_samples']
+            if station and event.station_id == station.pk:
+                changed.append('station')
+
             if moving:
                 # Prevent duplicate captures for the same video timestamp within 0.45s
                 is_duplicate = False
@@ -222,14 +254,21 @@ def _track_smoke(owner, source, key, kind, position, moving, mode, model_name, d
                         position__lte=position + 0.45,
                     ).exists()
 
-                if not is_duplicate:
+                # Respect configurable wall-clock capture interval for live streams unless frame jumps significantly
+                throttled = False
+                peak_margin = 2.0 if kind in ('simulator', 'rtsp', 'http_snapshot', 'phone', 'webcam') else 0.0
+                if not is_duplicate and min_capture_interval_seconds > 0 and score <= event.peak_score + peak_margin:
+                    latest_existing = event.captures.order_by('-created_at').first()
+                    if latest_existing and (now - latest_existing.created_at).total_seconds() < min_capture_interval_seconds:
+                        throttled = True
+
+                if not is_duplicate and not throttled:
                     event.positive_samples += 1
                     latest_capture = _create_capture(
                         event=event, alert=event.alert, owner=owner, source=source, key=key,
                         position=position, score=score, confidence=confidence,
                         detections=detections, elapsed_ms=elapsed_ms, images=images, written=written,
                     )
-            changed = ['last_seen', 'clear_samples', 'positive_samples']
             if score > event.peak_score:
                 replaced = [(field.storage, field.name) for field in (event.peak_original, event.peak_annotated) if field]
                 save_pair(event, 'peak_original', 'peak_annotated', images, written)
