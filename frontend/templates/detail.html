@@ -97,7 +97,7 @@
                 Vùng mô phỏng
               {% elif run.mode == 'fosp' %}
                 Độ phủ mặt nạ khói: {{ detection.mask_coverage|floatformat:2 }}% diện tích ảnh
-                {% if detection.confidence %} · Điểm nhận diện: {% widthratio detection.confidence 1 100 %}%{% endif %}
+                {% if detection.confidence %} · Phản hồi cao nhất của mô hình: {% widthratio detection.confidence 1 100 %}%{% endif %}
               {% else %}
                 Điểm tin cậy (Confidence): {{ detection.confidence|floatformat:3 }}
               {% endif %}
@@ -136,7 +136,7 @@
               <div class="cctv-capture-meta">
                 <div class="cctv-capture-top">
                   <strong>{{ cap.created_at|date:'H:i:s d/m/Y' }}</strong>
-                  <span class="badge badge-danger">Khói · {% widthratio cap.confidence 1 100 %}%</span>
+                  <span class="badge badge-danger" title="Phản hồi cao nhất của mô hình">Khói · đỉnh {% widthratio cap.confidence 1 100 %}%</span>
                 </div>
                 <p>
                   {% if cap.position is not None %}Giây {{ cap.position|floatformat:1 }} · {% endif %}
@@ -185,7 +185,7 @@
           </li>
           {% for entry in run.alert.history.all %}
             <li>
-              <strong>{{ entry.old_status }} → {{ entry.new_status }}</strong>
+              <strong>{{ entry.old_status_label }} → {{ entry.new_status_label }}</strong>
               <small>{{ entry.actor.username }} · {{ entry.created_at|date:'d/m H:i:s' }}</small>
               {% if entry.note %}<p>{{ entry.note }}</p>{% endif %}
             </li>
