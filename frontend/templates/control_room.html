@@ -3,8 +3,8 @@
 {% block title %}Phòng giám sát khói — ForestWatch{% endblock %}
 {% block body_class %}cctv-page{% endblock %}
 {% block head %}
-<link rel="stylesheet" href="{% static 'css/control-room.css' %}?v=20261116d">
-<script src="{% static 'js/control-room.js' %}?v=20261116d" defer></script>
+<link rel="stylesheet" href="{% static 'css/control-room.css' %}?v=20261116e">
+<script src="{% static 'js/control-room.js' %}?v=20261116e" defer></script>
 {% endblock %}
 
 {% block content %}
@@ -17,9 +17,9 @@
       data-phone-qr="{% url 'create_phone_qr' %}">
   <header class="cctv-heading">
     <div>
-      <div class="cctv-kicker"><i></i> FORESTWATCH / CCTV</div>
-      <h1>Phòng giám sát</h1>
-      <p>Quản lý nguồn hình, phát hiện dấu hiệu khói và xác minh bằng chứng.</p>
+      <div class="cctv-kicker"><i></i> FORESTWATCH / AI SMOKE SEGMENTATION COMMAND CENTER</div>
+      <h1>Phòng giám sát Camera Chòi Canh</h1>
+      <p>Giám sát đa luồng thời gian thực, khoanh vùng đa giác khói Pixel-level (FoSp) và tự động lưu bằng chứng theo từng màn hình.</p>
     </div>
     <div class="cctv-clock">
       <time id="cctv-clock">--:--:--</time>
@@ -28,9 +28,10 @@
   </header>
 
   <section class="cctv-stats" aria-label="Tổng quan giám sát">
-    <div><span>Nguồn giám sát</span><strong id="cctv-count">0 / 10</strong></div>
-    <div><span>Quét tự động</span><strong class="cctv-accent" id="cctv-auto-state">Đang bật</strong></div>
-    <a class="cctv-stat-link" href="{% url 'alerts' %}?status=PENDING"><span>Chờ xác minh ↗</span><strong id="cctv-incident-count">{{ pending_count }}</strong></a>
+    <div><span>Trạm camera hoạt động</span><strong id="cctv-count">0 / 10</strong></div>
+    <div class="cctv-stat-danger"><span>Màn hình đang báo động khói</span><strong id="cctv-active-smoke-count">0 trạm</strong></div>
+    <div><span>Trạng thái AI Engine</span><strong class="cctv-accent" id="cctv-auto-state">Đang bật</strong></div>
+    <a class="cctv-stat-link" href="{% url 'alerts' %}?status=PENDING"><span>Sự cố chờ xác minh ↗</span><strong id="cctv-incident-count">{{ pending_count }}</strong></a>
   </section>
 
   <div id="cctv-storage-notice" class="cctv-storage-notice" role="status" hidden></div>
@@ -81,17 +82,8 @@
       <ol class="cctv-log" id="cctv-log" aria-live="polite"></ol>
       <a href="{% url 'alerts' %}" class="cctv-history">Mở tất cả cảnh báo <span aria-hidden="true">↗</span></a>
       <div class="cctv-tip">
-        <strong>Lưu bằng chứng từ {{ evidence_threshold }}%</strong>
-        <p>Mỗi đợt giữ khung đầu đạt ngưỡng và thêm khung có vùng khói lớn hơn nếu xuất hiện.</p>
-      </div>
-      <div class="cctv-tip">
-        {% if reference_enabled %}
-          <strong>Nền tham chiếu cho E3</strong>
-          <p>Với camera cố định, lưu một khung không có khói ở cùng góc nhìn. Đổi hoặc bỏ nền khi camera đổi hướng.</p>
-        {% else %}
-          <strong>Kiểm tra đoạn nghi có khói</strong>
-          <p>Chọn 0,5× hoặc 0,25× để lấy mẫu dày hơn. Có thể dừng video rồi chọn Quét ngay.</p>
-        {% endif %}
+        <strong>🛡️ Bộ lọc Chống Báo Giả 3 Tầng (Đang bật)</strong>
+        <p>1. Phân đoạn mặt nạ khói Pixel-level (ngưỡng ≥ {{ evidence_threshold }}%)<br>2. Khoanh vùng ROI loại trừ mây / bầu trời<br>3. Tự động lưu khung hình đầu & khung đỉnh khói</p>
       </div>
     </aside>
   </div>
@@ -104,7 +96,8 @@
     <header class="cctv-card-header">
       <span class="cctv-channel"></span>
       <h3></h3>
-      <button type="button" class="cctv-icon cctv-settings" title="Đổi nguồn" aria-label="Đổi nguồn" hidden>⚙</button>
+      <button type="button" class="cctv-icon cctv-focus" title="Phóng to / Thu nhỏ màn hình này" aria-label="Phóng to màn hình">⛶</button>
+      <button type="button" class="cctv-icon cctv-settings" title="Đổi nguồn & cấu hình ROI" aria-label="Đổi nguồn" hidden>⚙</button>
       <button type="button" class="cctv-icon cctv-remove" title="Xóa nguồn và đóng cửa sổ" aria-label="Xóa nguồn và đóng cửa sổ">×</button>
     </header>
     <div class="cctv-stage">
@@ -112,6 +105,7 @@
       <svg class="cctv-overlay" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"></svg>
       <button type="button" class="cctv-empty-source"><span aria-hidden="true">＋</span> Chọn nguồn</button>
       <span class="cctv-source-badge" hidden></span>
+      <span class="cctv-smoke-hud-badge" aria-hidden="true">🔥 CẢNH BÁO KHÓI</span>
     </div>
     <div class="cctv-card-footer">
       <span class="cctv-state"><i></i><span></span></span>
@@ -133,7 +127,7 @@
       <button type="button" class="cctv-reference-set">Lưu khung nền</button>
       <button type="button" class="cctv-reference-clear" hidden>Bỏ nền</button>
     </div>
-    <a class="cctv-card-evidence" hidden>Xem bằng chứng ↗</a>
+    <a class="cctv-card-evidence" hidden>Xem bằng chứng chi tiết & xác minh ↗</a>
   </article>
 </template>
 

@@ -71,9 +71,11 @@ def draw_exclusion_zones(annotated, exclusion_zones):
     """Draw subtle boundary rectangles for ROI exclusion zones on the annotated image."""
     if not exclusion_zones:
         return annotated
+    from .fosp import _get_unicode_font
     out = annotated.copy()
     draw = ImageDraw.Draw(out)
     w, h = out.size
+    font, has_unicode = _get_unicode_font(max(12, w // 52))
     for zone in exclusion_zones:
         x1 = int(float(zone.get('x', 0)) * w)
         y1 = int(float(zone.get('y', 0)) * h)
@@ -81,8 +83,9 @@ def draw_exclusion_zones(annotated, exclusion_zones):
         y2 = int((float(zone.get('y', 0)) + float(zone.get('h', 0))) * h)
         if x2 > x1 and y2 > y1:
             draw.rectangle((x1, y1, x2, y2), outline='#38bdf8', width=2)
-            label = str(zone.get('label') or 'ROI Loại trừ')[:24]
-            draw.text((x1 + 6, y1 + 4), f'[Bỏ qua] {label}', fill='#38bdf8')
+            label = str(zone.get('label') or ('ROI Loại trừ' if has_unicode else 'ROI Exclusion'))[:24]
+            prefix = '[Bỏ qua]' if has_unicode else '[ROI]'
+            draw.text((x1 + 6, y1 + 4), f'{prefix} {label}', fill='#38bdf8', font=font)
     return out
 
 

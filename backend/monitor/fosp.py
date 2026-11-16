@@ -12,6 +12,24 @@ _prob_cache = {}
 _MAX_PROB_CACHE = 96
 
 
+@lru_cache(maxsize=8)
+def _get_unicode_font(size=14):
+    from PIL import ImageFont
+    candidates = (
+        r'C:\Windows\Fonts\arialbd.ttf',
+        r'C:\Windows\Fonts\segoeui.ttf',
+        r'C:\Windows\Fonts\arial.ttf',
+        '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+        '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+    )
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size), True
+        except OSError:
+            continue
+    return ImageFont.load_default(), False
+
+
 def preload_torch_on_windows():
     if sys.platform != 'win32' or settings.INFERENCE_MODE != 'fosp':
         return
@@ -96,7 +114,15 @@ def predict_fosp(image, reference=None):
         cache_key = None
         if reference is None:
             thumb_bytes = bytes(b >> 2 for b in image.convert('L').resize((16, 16), Image.Resampling.BILINEAR).tobytes())
-            cache_key = (str(settings.FOSP_MODEL_PATH), image.size, thumb_bytes)
+            cache_key = (
+                str(settings.FOSP_MODEL_PATH),
+                kind,
+                zoom,
+                round(float(threshold), 4),
+                round(float(getattr(settings, 'FOSP_GATE_THRESHOLD', 0.0)), 4),
+                image.size,
+                thumb_bytes,
+            )
             cached = _prob_cache.get(cache_key)
         else:
             cached = None
@@ -168,6 +194,8 @@ def predict_fosp(image, reference=None):
 
     detections = []
     draw = ImageDraw.Draw(overlay)
+    font, has_unicode = _get_unicode_font(max(13, image.width // 48))
+    smoke_word = 'Khói' if has_unicode else 'KHOI'
 
     if valid_contours:
         valid_contours.sort(key=cv2.contourArea, reverse=True)
@@ -192,9 +220,9 @@ def predict_fosp(image, reference=None):
                 'polygon': poly,
             })
             draw.rectangle(box, outline='#ff9900', width=max(3, image.width // 350))
-            label_text = f"Khói ({round(cnt_coverage, 1)}%)"
-            draw.rectangle((x, max(0, y - 24), min(image.width, x + 150), y), fill='#ff9900')
-            draw.text((x + 5, max(0, y - 20)), label_text, fill='#142b23')
+            label_text = f"{smoke_word} ({round(cnt_coverage, 1)}%)"
+            draw.rectangle((x, max(0, y - 24), min(image.width, x + 135), y), fill='#ff9900')
+            draw.text((x + 6, max(0, y - 21)), label_text, fill='#142b23', font=font)
     else:
         rows = np.any(mask, axis=1)
         cols = np.any(mask, axis=0)
@@ -209,8 +237,8 @@ def predict_fosp(image, reference=None):
             'box': box,
         })
         draw.rectangle(box, outline='#ff9900', width=max(3, image.width // 350))
-        label_text = f"Khói ({total_cov}%)"
-        draw.rectangle((xmin, max(0, ymin - 24), min(image.width, xmin + 150), ymin), fill='#ff9900')
-        draw.text((xmin + 5, max(0, ymin - 20)), label_text, fill='#142b23')
+        label_text = f"{smoke_word} ({total_cov}%)"
+        draw.rectangle((xmin, max(0, ymin - 24), min(image.width, xmin + 135), ymin), fill='#ff9900')
+        draw.text((xmin + 6, max(0, ymin - 21)), label_text, fill='#142b23', font=font)
 
     return detections, overlay
