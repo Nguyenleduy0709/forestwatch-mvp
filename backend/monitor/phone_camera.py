@@ -14,6 +14,7 @@ import qrcode.image.svg
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.core import signing
+from django.core.cache import cache
 from django.http import HttpResponse, HttpResponseNotModified, JsonResponse
 from django.shortcuts import render
 from django.urls import reverse
@@ -27,7 +28,11 @@ LOCAL_RANGES = tuple(map(ipaddress.ip_network, ('10.0.0.0/8', '172.16.0.0/12', '
 SNAPSHOT_PATHS = {'/shot.jpg', '/snapshot.jpg', '/snapshot.jpeg'}
 
 _SESSION_LOCK = threading.Lock()
-PHONE_SESSIONS = {}
+_PHONE_SESSION_TTL = 600
+
+
+def _session_cache_key(session_id: str) -> str:
+    return f'phone_cam:{session_id}'
 
 
 def get_lan_ip():
@@ -237,16 +242,17 @@ def phone_camera_push(request, token):
 
     tag = f'"{blake2s(jpeg_bytes, digest_size=12).hexdigest()}"'
     session_id = source['session']
+    key = _session_cache_key(session_id)
     with _SESSION_LOCK:
-        prev = PHONE_SESSIONS.get(session_id)
+        prev = cache.get(key)
         seq = (prev['sequence'] + 1) if prev else 1
-        PHONE_SESSIONS[session_id] = {
+        cache.set(key, {
             'owner': source['owner'],
             'image': jpeg_bytes,
             'etag': tag,
             'sequence': seq,
             'updated_at': time.time(),
-        }
+        }, timeout=_PHONE_SESSION_TTL)
     return JsonResponse({'status': 'ok', 'sequence': seq})
 
 
@@ -262,8 +268,7 @@ def phone_camera_frame(request, token):
 
     if source.get('mode') == 'push':
         session_id = source.get('session', '')
-        with _SESSION_LOCK:
-            entry = PHONE_SESSIONS.get(session_id)
+        entry = cache.get(_session_cache_key(session_id))
         if not entry:
             return JsonResponse({
                 'waiting': True,

@@ -10,9 +10,12 @@ import sys
 from importlib.util import find_spec
 from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
+from django.conf import settings
 from django.core import signing
-from django.http import JsonResponse, StreamingHttpResponse
+from django.http import FileResponse, Http404, HttpResponse, JsonResponse, StreamingHttpResponse
 from django.urls import reverse
+
+CACHED_DEMO_STREAMS = {'wSp-pUDcFQI', 'RWoYegPgRF4', 'TtUgnRqARUE', 'FZNDqZJvc5w'}
 
 
 TOKEN_SALT = 'monitor.video'
@@ -119,7 +122,14 @@ def resolve_source(request):
         headers = {}
         extension = parts.path.rsplit('.', 1)[-1].lower()
         if is_youtube:
-            url, headers, extension = resolve_youtube(youtube_id(parts))
+            vid = youtube_id(parts)
+            local_clip = settings.BASE_DIR / 'media' / 'demo_streams' / f'{vid}.mp4'
+            if vid in CACHED_DEMO_STREAMS and local_clip.is_file():
+                return JsonResponse({
+                    'url': reverse('demo_stream', args=[vid]),
+                    'type': 'Camera Chòi Canh',
+                })
+            url, headers, extension = resolve_youtube(vid)
         else:
             public_addresses(parts)
     except (VideoSourceError, OSError) as exc:
@@ -239,3 +249,36 @@ def relay_source(request, token):
     result['Cache-Control'] = 'private, no-store'
     result['Content-Security-Policy'] = "sandbox; default-src 'none'"
     return result
+
+
+def serve_demo_stream(request, stream_id):
+    """Serve locally cached real ALERTCalifornia CCTV MP4 video with HTTP Range support."""
+    if stream_id not in CACHED_DEMO_STREAMS:
+        raise Http404
+    clip_path = settings.BASE_DIR / 'media' / 'demo_streams' / f'{stream_id}.mp4'
+    if not clip_path.is_file():
+        raise Http404
+    file_size = clip_path.stat().st_size
+    range_header = request.headers.get('Range', '')
+    if range_header.startswith('bytes='):
+        try:
+            range_spec = range_header[6:].split(',', 1)[0].strip()
+            start_s, end_s = range_spec.split('-', 1)
+            start = int(start_s) if start_s else 0
+            end = int(end_s) if end_s else file_size - 1
+            end = min(end, file_size - 1)
+            if 0 <= start <= end < file_size:
+                length = end - start + 1
+                with clip_path.open('rb') as fh:
+                    fh.seek(start)
+                    data = fh.read(length)
+                resp = HttpResponse(data, status=206, content_type='video/mp4')
+                resp['Content-Length'] = str(length)
+                resp['Content-Range'] = f'bytes {start}-{end}/{file_size}'
+                resp['Accept-Ranges'] = 'bytes'
+                return resp
+        except (ValueError, OSError):
+            pass
+    resp = FileResponse(clip_path.open('rb'), content_type='video/mp4')
+    resp['Accept-Ranges'] = 'bytes'
+    return resp

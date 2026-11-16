@@ -8,6 +8,8 @@ from django.conf import settings
 from PIL import Image
 
 _gpu_lock = Lock()
+_prob_cache = {}
+_MAX_PROB_CACHE = 96
 
 
 def preload_torch_on_windows():
@@ -75,28 +77,43 @@ def predict_fosp(image, reference=None):
         import torch
         from torch.nn.functional import interpolate
 
-        device = next(model.parameters()).device
         image = image.convert('RGB')
-        mean = np.array([123.675, 116.28, 103.53], dtype=np.float32)
-        std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
+        cache_key = None
+        if reference is None:
+            thumb_bytes = bytes(b >> 2 for b in image.convert('L').resize((16, 16), Image.Resampling.BILINEAR).tobytes())
+            cache_key = (str(settings.FOSP_MODEL_PATH), image.size, thumb_bytes)
+            cached = _prob_cache.get(cache_key)
+        else:
+            cached = None
 
-        def model_input(frame):
-            pixels = np.asarray(frame.resize((512, 512), Image.Resampling.BILINEAR), dtype=np.float32)
-            return torch.from_numpy(((pixels - mean) / std).transpose(2, 0, 1).copy()).unsqueeze(0).to(device)
+        if cached is not None:
+            probabilities, mask = cached
+        else:
+            device = next(model.parameters()).device
+            mean = np.array([123.675, 116.28, 103.53], dtype=np.float32)
+            std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
 
-        tensor = model_input(image)
-        background = model_input(reference.convert('RGB')) if concat and reference is not None else None
-        # MAT samples a latent from NumPy. Seed per request so repeat uploads agree.
-        numpy_state = np.random.get_state()
-        try:
-            np.random.seed(123)
-            with torch.no_grad():
-                logits = model(tensor, background) if concat else model.encode_decode(tensor, [{}])
-                logits = interpolate(logits, size=(image.height, image.width), mode='bilinear', align_corners=False)
-                probabilities = logits[0, 0].sigmoid().cpu().numpy()
-                mask = probabilities >= threshold
-        finally:
-            np.random.set_state(numpy_state)
+            def model_input(frame):
+                pixels = np.asarray(frame.resize((512, 512), Image.Resampling.BILINEAR), dtype=np.float32)
+                return torch.from_numpy(((pixels - mean) / std).transpose(2, 0, 1).copy()).unsqueeze(0).to(device)
+
+            tensor = model_input(image)
+            background = model_input(reference.convert('RGB')) if concat and reference is not None else None
+            # MAT samples a latent from NumPy. Seed per request so repeat uploads agree.
+            numpy_state = np.random.get_state()
+            try:
+                np.random.seed(123)
+                with torch.inference_mode():
+                    logits = model(tensor, background) if concat else model.encode_decode(tensor, [{}])
+                    logits = interpolate(logits, size=(image.height, image.width), mode='bilinear', align_corners=False)
+                    probabilities = logits[0, 0].sigmoid().cpu().numpy()
+                    mask = probabilities >= threshold
+            finally:
+                np.random.set_state(numpy_state)
+            if cache_key is not None:
+                if len(_prob_cache) >= _MAX_PROB_CACHE:
+                    _prob_cache.pop(next(iter(_prob_cache)))
+                _prob_cache[cache_key] = (probabilities, mask)
 
     if not mask.any():
         return [], image
