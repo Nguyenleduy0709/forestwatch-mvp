@@ -49,6 +49,17 @@ def _load_model(weights, runtime):
     model = build_segmentor(config.model).to(device)
     checkpoint = torch.load(weights, map_location='cpu', weights_only=True)
     state_dict = checkpoint.get('state_dict', checkpoint)
+    if checkpoint.get('image_head') and checkpoint.get('input_fusion', 'none') == 'none' \
+            and checkpoint.get('use_temporal') is False and not checkpoint.get('multiscale'):
+        from .fosp_concat import FoSpConcat
+
+        # FoSp-Gate (E6): mask path of FoSp plus an image-level head used as a gate.
+        model = FoSpConcat(model, concat=False, image_head=True).to(device)
+        try:
+            model.load_state_dict(state_dict, strict=True)
+        except RuntimeError as exc:
+            raise RuntimeError(f'Trọng số {weights.name} không khớp kiến trúc FoSp-Gate.') from exc
+        return model.eval(), float(checkpoint['cfg']['threshold']), 'gate'
     if checkpoint.get('input_fusion') == 'concat' and checkpoint.get('use_temporal') is False:
         from .fosp_concat import FoSpConcat
 
@@ -57,7 +68,7 @@ def _load_model(weights, runtime):
             model.load_state_dict(state_dict, strict=True)
         except RuntimeError as exc:
             raise RuntimeError(f'Trọng số {weights.name} không khớp kiến trúc FoSp E3 concat.') from exc
-        return model.eval(), float(checkpoint['cfg']['threshold']), True
+        return model.eval(), float(checkpoint['cfg']['threshold']), 'concat'
     if 'extra_stem.weight' in state_dict or any(key.startswith('arbitration.') for key in state_dict):
         raise RuntimeError(f'Checkpoint {weights.name} cần bộ chạy FoSp khác.')
     cleaned = {}
@@ -65,12 +76,16 @@ def _load_model(weights, runtime):
         # Remap generator prefix from Kaggle/research training checkpoints
         cleaned[k.replace('decode_head.G.generator.', 'decode_head.G.')] = v
     model.load_state_dict(cleaned, strict=False)
-    return model.eval(), 0.4, False
+    return model.eval(), 0.4, 'plain'
 
 
 def predict_fosp(image, reference=None):
     with _gpu_lock:
-        model, threshold, concat = _load_model(settings.FOSP_MODEL_PATH, settings.FOSP_RUNTIME_DIR)
+        model, threshold, kind = _load_model(settings.FOSP_MODEL_PATH, settings.FOSP_RUNTIME_DIR)
+        concat = kind == 'concat'
+        zoom = kind == 'gate' and settings.FOSP_GATE_TTA == 'zoom'
+        if kind == 'gate':
+            threshold = settings.FOSP_GATE_TTA_THRESHOLD if zoom else threshold
         import numpy as np
         import torch
         from torch.nn.functional import interpolate
@@ -91,10 +106,28 @@ def predict_fosp(image, reference=None):
         try:
             np.random.seed(123)
             with torch.no_grad():
-                logits = model(tensor, background) if concat else model.encode_decode(tensor, [{}])
-                logits = interpolate(logits, size=(image.height, image.width), mode='bilinear', align_corners=False)
-                probabilities = logits[0, 0].sigmoid().cpu().numpy()
+                image_probability = None
+                if kind == 'gate':
+                    from .fosp_concat import zoom_probability
+
+                    if zoom:
+                        probability_map = zoom_probability(model, tensor)[:, None]
+                    else:
+                        probability_map = interpolate(model(tensor), size=tensor.shape[-2:], mode='bilinear',
+                                                      align_corners=False).sigmoid()
+                    image_probability = float(model.image_probability[0])
+                    probability_map = interpolate(probability_map, size=(image.height, image.width),
+                                                  mode='bilinear', align_corners=False)
+                    probabilities = probability_map[0, 0].cpu().numpy()
+                else:
+                    logits = model(tensor, background) if concat else model.encode_decode(tensor, [{}])
+                    logits = interpolate(logits, size=(image.height, image.width), mode='bilinear',
+                                         align_corners=False)
+                    probabilities = logits[0, 0].sigmoid().cpu().numpy()
                 mask = probabilities >= threshold
+                # FoSp-Gate erases the whole mask when the image-level head says "no smoke".
+                if image_probability is not None and image_probability < settings.FOSP_GATE_THRESHOLD:
+                    mask[:] = False
         finally:
             np.random.set_state(numpy_state)
 
