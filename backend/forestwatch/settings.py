@@ -61,6 +61,11 @@ MODEL_PATH = os.getenv('MODEL_PATH', str(BASE_DIR / 'weights' / 'best.pt'))
 MODEL_CONFIDENCE = float(os.getenv('MODEL_CONFIDENCE', '0.35'))
 FOSP_MODEL_PATH = Path(os.getenv('FOSP_MODEL_PATH', str(BASE_DIR / 'weights' / 'fosp_best.pth')))
 FOSP_RUNTIME_DIR = Path(os.getenv('FOSP_RUNTIME_DIR', str(BASE_DIR.parent / '.fosp-runtime')))
+# FoSp-Gate (E6) checkpoints only. Defaults are the values chosen on validation: zoom TTA with pixel threshold 0.3;
+# with zoom the validation rule returned gate 0.0 (no mask erased), without zoom it returned 0.9989 at threshold 0.4.
+FOSP_GATE_TTA = os.getenv('FOSP_GATE_TTA', 'zoom').lower()
+FOSP_GATE_TTA_THRESHOLD = float(os.getenv('FOSP_GATE_TTA_THRESHOLD', '0.3'))
+FOSP_GATE_THRESHOLD = float(os.getenv('FOSP_GATE_THRESHOLD', '0.0' if FOSP_GATE_TTA == 'zoom' else '0.9989'))
 PHONE_CAMERA_NETWORKS = tuple(
     IPv4Network(value.strip()) for value in os.getenv('PHONE_CAMERA_NETWORKS', '').split(',') if value.strip()
 )
