@@ -160,6 +160,14 @@
             button.setAttribute('aria-pressed', String(Number(button.dataset.cols) === cols));
         }
     }
+    function updateSmokeCounter() {
+        const smokeEl = document.querySelector('#cctv-active-smoke-count');
+        if (!smokeEl)
+            return;
+        const activeSmoke = Array.from(slots.values()).filter(slot => slot.card.dataset.state === 'smoke').length;
+        const configured = Array.from(slots.values()).filter(slot => slot.saved).length;
+        smokeEl.textContent = configured > 0 ? `${activeSmoke} / ${configured} trạm` : '0 trạm';
+    }
     function updateCounts() {
         const saved = Array.from(slots.values()).filter(slot => slot.saved).length;
         get('#cctv-count').textContent = `${saved} / ${maxSlots}`;
@@ -167,10 +175,12 @@
         add.disabled = saved >= maxSlots;
         if (!manualLayout)
             setLayout(Math.max(2, Math.ceil(slots.size / 2)));
+        updateSmokeCounter();
     }
     function status(slot, state, message) {
         slot.card.dataset.state = state;
         slot.status.textContent = message;
+        updateSmokeCounter();
     }
     function ready(source) {
         const media = source.element;
@@ -277,6 +287,17 @@
                 openDialog(id);
         });
         slot.settings.addEventListener('click', () => openDialog(id));
+        const focusBtn = find('.cctv-focus');
+        focusBtn?.addEventListener('click', () => {
+            const willFocus = !card.classList.contains('is-focused');
+            for (const item of slots.values()) {
+                item.card.classList.remove('is-focused');
+            }
+            if (willFocus) {
+                card.classList.add('is-focused');
+                card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        });
         slot.phoneQrBtn?.addEventListener('click', () => openDialog(id));
         slot.alertsBtn?.addEventListener('click', () => void openScreenReport(slot));
         const remove = find('.cctv-remove');

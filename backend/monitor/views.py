@@ -4,6 +4,7 @@ import io
 import json
 import logging
 from math import isfinite
+from pathlib import Path
 from time import perf_counter
 from urllib.parse import quote
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -79,18 +80,63 @@ def dashboard(request):
         'total': runs.count(), 'pending': alerts.filter(status='PENDING').count(),
         'confirmed': alerts.filter(status='CONFIRMED').count(), 'alert_count': alerts.count()})
 
+def _load_sample_case_image(sample_case: str):
+    """Load a built-in real field frame for 1-click single-image analysis during presentations."""
+    presets = {
+        'windy_smoke': ('wSp-pUDcFQI', 20.0, 'Mẫu Thực Địa 01 · Trạm Bắc (Windy Fire)'),
+        'coyote_early': ('TtUgnRqARUE', 12.0, 'Mẫu Thực Địa 02 · Khói Sớm (Coyote Fire 12s)'),
+        'dixie_smoke': ('RWoYegPgRF4', 20.0, 'Mẫu Thực Địa 03 · Trạm Đông (Dixie Fire)'),
+        'clean_forest': (None, 0.0, 'Mẫu Đối Chứng Âm Tính · Rừng Xanh An Toàn'),
+    }
+    if sample_case not in presets:
+        return None, None
+    vid_id, sec, label = presets[sample_case]
+    if vid_id is None:
+        forest_path = settings.BASE_DIR.parent / 'frontend' / 'static' / 'img' / 'forest.jpg'
+        with Image.open(forest_path) as img:
+            return img.convert('RGB').resize((640, 360), Image.Resampling.BILINEAR), label
+    stream_path = Path(settings.MEDIA_ROOT) / 'demo_streams' / f'{vid_id}.mp4'
+    if stream_path.is_file():
+        try:
+            import cv2
+            cap = cv2.VideoCapture(str(stream_path))
+            cap.set(cv2.CAP_PROP_POS_MSEC, sec * 1000.0)
+            ok, frame = cap.read()
+            cap.release()
+            if ok:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                return Image.fromarray(rgb).resize((640, 360), Image.Resampling.BILINEAR), label
+        except Exception:
+            pass
+    forest_path = settings.BASE_DIR.parent / 'frontend' / 'static' / 'img' / 'forest.jpg'
+    with Image.open(forest_path) as img:
+        return img.convert('RGB').resize((640, 360), Image.Resampling.BILINEAR), label
+
+
 @login_required
 @require_POST
 def analyze(request):
-    form = UploadForm(request.POST, request.FILES)
-    if not form.is_valid():
-        messages.error(request, ' '.join(str(e) for errors in form.errors.values() for e in errors))
-        return redirect('dashboard')
+    sample_case = (request.POST.get('sample_case') or '').strip()
+    if sample_case:
+        sample_img, sample_source = _load_sample_case_image(sample_case)
+        if sample_img is None:
+            messages.error(request, 'Mẫu kiểm thử không hợp lệ.')
+            return redirect('dashboard')
+        normalized_image = sample_img
+        source_name = request.POST.get('source', '').strip() or sample_source
+        simulate = sample_case != 'clean_forest' and settings.INFERENCE_MODE == 'demo'
+    else:
+        form = UploadForm(request.POST, request.FILES)
+        if not form.is_valid():
+            messages.error(request, ' '.join(str(e) for errors in form.errors.values() for e in errors))
+            return redirect('dashboard')
+        normalized_image = form.normalized_image
+        source_name = form.cleaned_data['source']
+        simulate = form.cleaned_data.get('simulate_smoke', False)
     started = perf_counter()
-    simulate = form.cleaned_data.get('simulate_smoke', False)
     try:
         detections, annotated = predict(
-            form.normalized_image,
+            normalized_image,
             simulate,
         )
     except RuntimeError as exc:
@@ -100,10 +146,10 @@ def analyze(request):
         logging.getLogger(__name__).exception('Inference failed')
         messages.error(request, 'Phân tích thất bại. Kiểm tra trọng số, bộ nhớ và log trên máy chạy ứng dụng.')
         return redirect('dashboard')
-    run = Analysis(owner=request.user, source=form.cleaned_data['source'], mode=settings.INFERENCE_MODE,
+    run = Analysis(owner=request.user, source=source_name, mode=settings.INFERENCE_MODE,
                    model_name=current_model_name(),
                    detections=detections, elapsed_ms=round((perf_counter()-started)*1000))
-    for field, image in [('original', form.normalized_image), ('annotated', annotated)]:
+    for field, image in [('original', normalized_image), ('annotated', annotated)]:
         buffer = io.BytesIO()
         image.save(buffer, format='JPEG', quality=90)
         getattr(run, field).save(f'{run.id}.jpg', ContentFile(buffer.getvalue()), save=False)
