@@ -1,0 +1,36 @@
+{% extends 'base.html' %}
+{% load static %}
+{% block title %}Không tìm thấy bằng chứng — ForestWatch{% endblock %}
+{% block body_class %}cctv-page cctv-evidence-page{% endblock %}
+{% block head %}<link rel="stylesheet" href="{% static 'css/control-room.css' %}">{% endblock %}
+{% block content %}
+<main class="workspace observation-workspace">
+  <div class="breadcrumb-bar">
+    <a class="back" href="{% url 'alerts' %}">← Danh sách cảnh báo</a>
+    <a class="cctv-history" href="{% url 'control_room' %}">Về phòng giám sát ↗</a>
+  </div>
+
+  <div class="page-heading">
+    <div>
+      <span class="eyebrow">KHÔNG TÌM THẤY BẰNG CHỨNG · HTTP 404</span>
+      <h1>Không thể mở phiên phân tích này</h1>
+      <p>Mã phiên: <code>{{ run_id }}</code> · Tài khoản hiện tại: <strong>{{ user.username }}</strong></p>
+    </div>
+  </div>
+
+  <section class="panel" style="padding:24px; display:grid; gap:16px;">
+    <div class="notice">
+      <p><strong>Phiên cảnh báo không tồn tại trong tài khoản <code>{{ user.username }}</code>.</strong></p>
+    </div>
+
+    <div class="actions" style="display:flex; flex-wrap:wrap; gap:10px; padding-top:6px;">
+      <a class="cctv-btn cctv-primary" href="{% url 'alerts' %}">Xem cảnh báo của {{ user.username }}</a>
+      <a class="cctv-btn" href="{% url 'control_room' %}">Về phòng giám sát</a>
+      <form method="post" action="{% url 'logout' %}" style="margin:0;">
+        {% csrf_token %}
+        <button class="cctv-btn" type="submit">Đăng xuất để đổi tài khoản ↗</button>
+      </form>
+    </div>
+  </section>
+</main>
+{% endblock %}

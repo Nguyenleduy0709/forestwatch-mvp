@@ -56,6 +56,60 @@
     background: rgba(14, 23, 19, 0.6);
     margin-bottom: 16px;
   }
+  .fw-tg-status-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 10px 0 12px;
+    font-size: 12px;
+  }
+  .fw-tg-pair-card {
+    margin: 12px 0;
+    padding: 14px;
+    border-radius: 10px;
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    background: rgba(16, 185, 129, 0.08);
+    display: grid;
+    gap: 10px;
+    font-size: 12px;
+  }
+  .fw-tg-pair-card[hidden], .fw-tg-chat-list[hidden] { display: none; }
+  .fw-tg-btn-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+  }
+  .fw-tg-chat-list {
+    margin-top: 10px;
+    display: grid;
+    gap: 8px;
+  }
+  .fw-tg-chat-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--cctv-line);
+    background: var(--cctv-panel-alt);
+    font-size: 12px;
+  }
+  .fw-details-advanced {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--cctv-line);
+    font-size: 12px;
+  }
+  .fw-details-advanced summary {
+    cursor: pointer;
+    color: var(--cctv-muted);
+    font-weight: 600;
+    user-select: none;
+  }
   @media (max-width: 980px) {
     .fw-settings-grid, .fw-form-grid-2 { grid-template-columns: 1fr; }
   }
@@ -68,7 +122,7 @@
     <div>
       <div class="cctv-kicker"><i></i> FORESTWATCH / PRODUCTION SETTINGS & ALERTING</div>
       <h1>Cấu hình Thực tế & Kênh Cảnh báo</h1>
-      <p>Tinh chỉnh bộ lọc chống báo động giả đa khung hình, thiết lập gửi ảnh khói tức thì qua Telegram / Email / Webhook và quản lý dung lượng lưu trữ.</p>
+      <p>Tinh chỉnh bộ lọc chống báo động giả đa khung hình, thiết lập gửi ảnh khói tức thì qua Telegram / Email và quản lý dung lượng lưu trữ.</p>
     </div>
     <div style="display:flex; gap:10px; flex-wrap:wrap;">
       <a class="cctv-btn" href="{% url 'export_alerts_csv' %}">📥 Xuất báo cáo CSV</a>
@@ -171,7 +225,7 @@
         <section class="panel">
           <div class="panel-heading">
             <h2>2. Kênh Cảnh báo Ngoài Ứng dụng (24/7)</h2>
-            <span>TELEGRAM · EMAIL · WEBHOOK</span>
+            <span>TELEGRAM · EMAIL</span>
           </div>
 
           <!-- Telegram -->
@@ -180,26 +234,97 @@
               <input id="id_telegram_enabled" name="telegram_enabled" type="checkbox"
                      {% if profile.telegram_enabled %}checked{% endif %}>
               <span>
-                <strong>✈️ Telegram Bot (Gửi ngay ảnh khoanh vùng khói + link Maps)</strong>
-                <small>Miễn phí, độ trễ &lt; 1 giây tới nhóm trực ban PCCC / Kiểm lâm.</small>
+                <strong>✈️ Telegram Bot (Gửi ngay ảnh khoanh vùng khói)</strong>
+                <small>Miễn phí, độ trễ &lt; 1 giây tới tài khoản cá nhân hoặc nhóm trực ban PCCC / Kiểm lâm.</small>
               </span>
             </label>
-            <div class="fw-form-grid-2">
+
+            <div class="fw-tg-status-bar">
+              <span>
+                {% if using_custom_bot %}
+                  🤖 <strong>Đang dùng Bot riêng của bạn</strong>
+                  {% if has_system_bot %}
+                    <button type="submit" name="action" value="use_system_bot" class="cctv-btn" style="margin-left:8px; padding:3px 8px; font-size:11px;">Dùng lại Bot hệ thống</button>
+                  {% endif %}
+                {% elif has_system_bot %}
+                  🤖 Bot hệ thống sẵn sàng{% if system_bot_username %}: <code>@{{ system_bot_username }}</code>{% endif %}
+                {% else %}
+                  ⚠️ Chưa cấu hình Bot mặc định — hãy nhập Bot riêng bên dưới.
+                {% endif %}
+              </span>
+              <span id="tg-conn-badge" class="pill">
+                {% if profile.telegram_chat_id %}
+                  ✅ Đã liên kết: {{ profile.telegram_chat_id }}
+                {% else %}
+                  ⚪ Chưa liên kết Chat ID
+                {% endif %}
+              </span>
+            </div>
+
+            <div class="fw-tg-btn-row" style="margin-bottom:10px;">
+              <button type="button" id="btn-tg-pair" class="button small">
+                🔗 Kết nối Telegram 1 chạm (Không cần tìm Chat ID)
+              </button>
+            </div>
+
+            <div id="tg-pair-box" class="fw-tg-pair-card" hidden>
               <div>
-                <label for="id_telegram_bot_token">Bot Token (@BotFather)</label>
-                <input id="id_telegram_bot_token" name="telegram_bot_token" type="text"
-                       value="{{ masked_token }}" placeholder="123456789:AAH...">
+                <strong>Cách 1 — Dùng Telegram Web trên trình duyệt (khuyên dùng trên máy tính):</strong>
+                <div class="fw-tg-btn-row" style="margin-top:6px;">
+                  <code id="tg-group-cmd" style="padding:5px 8px; background:rgba(0,0,0,0.35); border-radius:6px;">/start fw_...</code>
+                  <button type="button" id="btn-copy-tg-cmd" class="cctv-btn">📋 Copy lệnh</button>
+                  <a id="tg-web-link" href="#" target="_blank" rel="noopener" class="button small">
+                    🌐 Copy lệnh &amp; Mở Telegram Web ↗
+                  </a>
+                </div>
+                <small style="display:block; margin-top:4px; color:var(--cctv-muted);">
+                  Dán lệnh vừa copy (<code>Ctrl+V</code>) vào khung chat với <strong id="tg-bot-name">@bot</strong> hoặc vào Nhóm rồi nhấn Gửi.
+                </small>
               </div>
               <div>
-                <label for="id_telegram_chat_id">Chat ID / Group ID</label>
-                <input id="id_telegram_chat_id" name="telegram_chat_id" type="text"
-                       value="{{ profile.telegram_chat_id }}" placeholder="-1001234567890">
+                <strong>Cách 2 — Trên điện thoại / máy có cài sẵn App Telegram Desktop:</strong>
+                <div class="fw-tg-btn-row" style="margin-top:8px;">
+                  <a id="tg-personal-link" href="#" target="_blank" rel="noopener" class="button small secondary">
+                    ✈️ Mở App Telegram &amp; START ↗
+                  </a>
+                  <a id="tg-group-link" href="#" target="_blank" rel="noopener" class="button small secondary">
+                    👥 Thêm Bot vào Nhóm trực ban ↗
+                  </a>
+                </div>
+              </div>
+              <div class="fw-tg-btn-row" style="justify-content:space-between; border-top:1px solid rgba(255,255,255,0.08); padding-top:8px;">
+                <span id="tg-pair-status">⏳ Đang chờ bạn gửi lệnh kết nối trong Telegram...</span>
+                <button type="button" id="btn-tg-check" class="cctv-btn">🔄 Kiểm tra ngay</button>
               </div>
             </div>
+
+            <div>
+              <label for="id_telegram_chat_id">Chat ID / Group ID (tự động điền sau khi kết nối)</label>
+              <input id="id_telegram_chat_id" name="telegram_chat_id" type="text"
+                     value="{{ profile.telegram_chat_id }}" placeholder="Nhấn 'Kết nối Telegram 1 chạm' ở trên hoặc nhập thủ công">
+            </div>
+
+            <details class="fw-details-advanced" {% if using_custom_bot or not has_system_bot %}open{% endif %}>
+              <summary>⚙️ Tùy chọn nâng cao: Dùng Bot @BotFather riêng (hoặc tự tìm Chat ID cho Bot riêng)</summary>
+              <div style="margin-top:10px; display:grid; gap:10px;">
+                <div>
+                  <label for="id_telegram_bot_token">Bot Token riêng (@BotFather)</label>
+                  <input id="id_telegram_bot_token" name="telegram_bot_token" type="text"
+                         value="{{ masked_token }}" placeholder="{% if has_system_bot %}Để trống để dùng Bot hệ thống{% if system_bot_username %} (@{{ system_bot_username }}){% endif %}{% else %}123456789:AAH...{% endif %}">
+                </div>
+                <div class="fw-tg-btn-row">
+                  <button type="button" id="btn-tg-discover" class="button small secondary">
+                    🔍 Tự tìm Chat ID từ Bot riêng
+                  </button>
+                  <small style="color:var(--cctv-muted);">Nhắn 1 tin cho bot riêng (hoặc vào nhóm có bot), rồi bấm nút này để chọn.</small>
+                </div>
+                <div id="tg-discover-results" class="fw-tg-chat-list" hidden></div>
+              </div>
+            </details>
           </div>
 
           <!-- Email -->
-          <div class="fw-channel-box">
+          <div class="fw-channel-box" style="margin-bottom:0;">
             <label class="fw-switch-row" for="id_email_enabled" style="margin-top:0;text-transform:none;">
               <input id="id_email_enabled" name="email_enabled" type="checkbox"
                      {% if profile.email_enabled %}checked{% endif %}>
@@ -211,21 +336,6 @@
             <label for="id_email_recipients">Danh sách Email nhận cảnh báo (cách nhau bằng dấu phẩy)</label>
             <input id="id_email_recipients" name="email_recipients" type="text"
                    value="{{ profile.email_recipients }}" placeholder="trucban@kiemlam.vn, quanly@congty.vn">
-          </div>
-
-          <!-- Webhook -->
-          <div class="fw-channel-box" style="margin-bottom:0;">
-            <label class="fw-switch-row" for="id_webhook_enabled" style="margin-top:0;text-transform:none;">
-              <input id="id_webhook_enabled" name="webhook_enabled" type="checkbox"
-                     {% if profile.webhook_enabled %}checked{% endif %}>
-              <span>
-                <strong>🔗 Webhook (Discord / Slack / Zalo OA / Còi báo IoT)</strong>
-                <small>Gửi JSON POST khi phát hiện khói kèm tọa độ GPS &amp; mức độ tin cậy.</small>
-              </span>
-            </label>
-            <label for="id_webhook_url">URL Webhook đích</label>
-            <input id="id_webhook_url" name="webhook_url" type="url"
-                   value="{{ profile.webhook_url }}" placeholder="https://discord.com/api/webhooks/...">
           </div>
 
           <div class="actions" style="margin-top:20px;">
@@ -310,4 +420,220 @@
     </div>
   </form>
 </main>
+<script>
+(() => {
+  const pairBtn = document.getElementById('btn-tg-pair');
+  const pairBox = document.getElementById('tg-pair-box');
+  const pairStatus = document.getElementById('tg-pair-status');
+  const checkBtn = document.getElementById('btn-tg-check');
+  const copyBtn = document.getElementById('btn-copy-tg-cmd');
+  const personalLink = document.getElementById('tg-personal-link');
+  const groupLink = document.getElementById('tg-group-link');
+  const webLink = document.getElementById('tg-web-link');
+  const groupCmd = document.getElementById('tg-group-cmd');
+  const botNameEl = document.getElementById('tg-bot-name');
+  const chatInput = document.getElementById('id_telegram_chat_id');
+  const enabledInput = document.getElementById('id_telegram_enabled');
+  const tokenInput = document.getElementById('id_telegram_bot_token');
+  const connBadge = document.getElementById('tg-conn-badge');
+  const discoverBtn = document.getElementById('btn-tg-discover');
+  const discoverList = document.getElementById('tg-discover-results');
+  const csrfEl = document.querySelector('input[name="csrfmiddlewaretoken"]');
+
+  let activeCode = '';
+  let pollTimer = null;
+  let pollCount = 0;
+
+  function stopPolling() {
+    if (pollTimer) {
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  function csrfToken() {
+    return csrfEl ? csrfEl.value : '';
+  }
+
+  function setStatus(text, isOk = false) {
+    if (pairStatus) {
+      pairStatus.textContent = text;
+      pairStatus.style.color = isOk ? '#34d399' : '';
+    }
+  }
+
+  async function pollPairOnce() {
+    if (!activeCode) return;
+    pollCount += 1;
+    try {
+      const res = await fetch(`{% url 'telegram_pair_status_api' %}?code=${encodeURIComponent(activeCode)}`, {
+        headers: { 'Accept': 'application/json' },
+      });
+      const data = await res.json();
+      if (data.paired) {
+        stopPolling();
+        if (chatInput) chatInput.value = data.chat_id || '';
+        if (enabledInput) enabledInput.checked = true;
+        if (connBadge) connBadge.textContent = `✅ Đã liên kết: ${data.chat_id || ''}`;
+        setStatus(`✅ Đã kết nối thành công với ${data.chat_label || data.chat_id}! Hãy bấm "Lưu & Gửi thử thông báo ngay" để kiểm tra.`, true);
+        return;
+      }
+      if (!res.ok || data.expired) {
+        stopPolling();
+        setStatus(`⚠️ ${data.error || 'Mã kết nối đã hết hạn.'}`);
+        return;
+      }
+      if (pollCount >= 40) {
+        stopPolling();
+        setStatus('⏱️ Chưa thấy tín hiệu từ Telegram. Sau khi bấm START, hãy nhấn "Kiểm tra ngay".');
+      }
+    } catch (err) {
+      stopPolling();
+      setStatus('⚠️ Lỗi mạng khi kiểm tra trạng thái Telegram.');
+    }
+  }
+
+  if (pairBtn) {
+    pairBtn.addEventListener('click', async () => {
+      stopPolling();
+      pollCount = 0;
+      pairBtn.disabled = true;
+      setStatus('Đang tạo liên kết kết nối...');
+      const customVal = tokenInput ? tokenInput.value.trim() : '';
+      try {
+        const res = await fetch(`{% url 'telegram_pair_start_api' %}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': csrfToken(),
+          },
+          body: JSON.stringify({
+            mode: customVal ? 'custom' : 'auto',
+            bot_token: customVal,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          pairBox.hidden = false;
+          setStatus(`⚠️ ${data.error || 'Không tạo được liên kết Telegram.'}`);
+          return;
+        }
+        activeCode = data.code;
+        if (botNameEl) botNameEl.textContent = `@${data.bot_username}`;
+        if (webLink) webLink.href = data.web_url || data.personal_url;
+        if (personalLink) personalLink.href = data.personal_url;
+        if (groupLink) groupLink.href = data.group_url;
+        if (groupCmd) groupCmd.textContent = data.group_command;
+        pairBox.hidden = false;
+        setStatus('⏳ Đang chờ bạn gửi lệnh kết nối trong Telegram...');
+        pollTimer = setInterval(pollPairOnce, 2500);
+      } catch (err) {
+        pairBox.hidden = false;
+        setStatus('⚠️ Không thể kết nối tới máy chủ ForestWatch.');
+      } finally {
+        pairBtn.disabled = false;
+      }
+    });
+  }
+
+  if (checkBtn) {
+    checkBtn.addEventListener('click', () => {
+      pollCount = 0;
+      setStatus('🔄 Đang kiểm tra tín hiệu từ Telegram...');
+      pollPairOnce();
+    });
+  }
+
+  if (copyBtn && groupCmd) {
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(groupCmd.textContent || '');
+        copyBtn.textContent = '✅ Đã copy';
+        setTimeout(() => { copyBtn.textContent = '📋 Copy lệnh'; }, 1800);
+      } catch (err) {
+        copyBtn.textContent = 'Hãy bôi đen lệnh để copy';
+      }
+    });
+  }
+
+  if (webLink && groupCmd) {
+    webLink.addEventListener('click', () => {
+      const cmd = groupCmd.textContent || '';
+      if (navigator.clipboard && cmd) {
+        navigator.clipboard.writeText(cmd).catch(() => {});
+      }
+      setStatus(`📋 Đã copy "${cmd}" — Hãy dán (Ctrl+V) & Gửi cho @${(botNameEl && botNameEl.textContent || '').replace('@', '')} trên Telegram Web...`);
+    });
+  }
+
+  if (discoverBtn && discoverList) {
+    discoverBtn.addEventListener('click', async () => {
+      discoverBtn.disabled = true;
+      discoverList.hidden = false;
+      discoverList.replaceChildren();
+      const loading = document.createElement('small');
+      loading.textContent = '⏳ Đang quét các cuộc trò chuyện gần đây từ Bot riêng...';
+      discoverList.appendChild(loading);
+      try {
+        const res = await fetch(`{% url 'telegram_discover_chats_api' %}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': csrfToken(),
+          },
+          body: JSON.stringify({ bot_token: tokenInput ? tokenInput.value.trim() : '' }),
+        });
+        const data = await res.json();
+        discoverList.replaceChildren();
+        if (!res.ok || !data.ok) {
+          const errMsg = document.createElement('small');
+          errMsg.textContent = `⚠️ ${data.error || 'Không tìm được Chat ID.'}`;
+          discoverList.appendChild(errMsg);
+          return;
+        }
+        const chats = data.chats || [];
+        if (!chats.length) {
+          const emptyMsg = document.createElement('small');
+          emptyMsg.textContent = 'Chưa thấy tin nhắn nào tới Bot riêng. Hãy gửi 1 tin cho Bot rồi bấm tìm lại.';
+          discoverList.appendChild(emptyMsg);
+          return;
+        }
+        chats.forEach((c) => {
+          const row = document.createElement('div');
+          row.className = 'fw-tg-chat-item';
+          const info = document.createElement('span');
+          const strong = document.createElement('strong');
+          strong.textContent = c.label || c.chat_id;
+          const meta = document.createElement('small');
+          meta.style.marginLeft = '8px';
+          meta.style.color = 'var(--cctv-muted)';
+          meta.textContent = `${c.type_label || c.type} · ID: ${c.chat_id}`;
+          info.appendChild(strong);
+          info.appendChild(meta);
+
+          const chooseBtn = document.createElement('button');
+          chooseBtn.type = 'button';
+          chooseBtn.className = 'cctv-btn';
+          chooseBtn.textContent = 'Chọn ID này';
+          chooseBtn.addEventListener('click', () => {
+            if (chatInput) chatInput.value = c.chat_id;
+            if (enabledInput) enabledInput.checked = true;
+            if (connBadge) connBadge.textContent = `✅ Đã chọn: ${c.chat_id}`;
+          });
+          row.appendChild(info);
+          row.appendChild(chooseBtn);
+          discoverList.appendChild(row);
+        });
+      } catch (err) {
+        discoverList.replaceChildren();
+        const errMsg = document.createElement('small');
+        errMsg.textContent = '⚠️ Lỗi kết nối máy chủ.';
+        discoverList.appendChild(errMsg);
+      } finally {
+        discoverBtn.disabled = false;
+      }
+    });
+  }
+})();
+</script>
 {% endblock %}

@@ -109,9 +109,9 @@ class SmokeEventsTest(TestCase):
 
     def test_changing_model_keeps_evidence_in_separate_events(self):
         with self.settings(FOSP_MODEL_PATH=Path('best.pth')):
-            first = self.scan(3.2, kind='phone')
+            first = self.scan(3.2, kind='rtsp')
         with self.settings(FOSP_MODEL_PATH=Path('E3_concat_best.pth')):
-            second = self.scan(4.2, kind='phone')
+            second = self.scan(4.2, kind='rtsp')
         self.assertTrue(second['event_created'])
         self.assertNotEqual(first['event']['id'], second['event']['id'])
         first_event = SmokeEvent.objects.get(alert_id=first['event']['id'])

@@ -1,4 +1,4 @@
-"""Out-of-app real-time alert dispatching (Telegram, Email SMTP, Webhook) & storage cleanup."""
+"""Out-of-app real-time alert dispatching (Telegram, Email SMTP) & storage cleanup."""
 import json
 import logging
 import threading
@@ -15,6 +15,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from .models import Alert, MonitoringProfile, NotificationLog, SmokeCapture
+from .telegram_bot import effective_telegram_token, telegram_urlopen
 
 logger = logging.getLogger(__name__)
 
@@ -60,16 +61,16 @@ def _send_telegram_photo(*, bot_token: str, chat_id: str, caption: str, photo_by
 
     req = urllib.request.Request(url, data=body, headers=headers, method='POST')
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
+        with telegram_urlopen(req, timeout=15) as resp:
             res_data = json.loads(resp.read().decode('utf-8'))
             if res_data.get('ok'):
                 return True, 'Telegram đã gửi thành công.'
-            return False, str(res_data.get('description') or 'Telegram từ chối yêu cầu.')
+            return False, str(res_data.get('description') or 'Telegram từ chối yêu cầu.').replace(token, '***')
     except urllib.error.HTTPError as exc:
-        err_body = exc.read().decode('utf-8', errors='ignore')[:240]
+        err_body = exc.read().decode('utf-8', errors='ignore').replace(token, '***')[:240]
         return False, f'HTTP {exc.code}: {err_body}'
     except Exception as exc:
-        return False, str(exc)[:240]
+        return False, str(exc).replace(token, '***')[:240]
 
 
 def _send_email_alert(*, recipients: str, subject: str, html_body: str, text_body: str, photo_bytes: bytes | None) -> tuple[bool, str]:
@@ -91,26 +92,6 @@ def _send_email_alert(*, recipients: str, subject: str, html_body: str, text_bod
             msg.attach(img)
         sent_count = msg.send(fail_silently=False)
         return sent_count > 0, f'Đã gửi Email tới {len(emails)} địa chỉ.'
-    except Exception as exc:
-        return False, str(exc)[:240]
-
-
-def _send_webhook_alert(*, webhook_url: str, payload: dict) -> tuple[bool, str]:
-    url = (webhook_url or '').strip()
-    if not url.startswith(('http://', 'https://')):
-        return False, 'URL Webhook không hợp lệ.'
-    data = json.dumps(payload).encode('utf-8')
-    req = urllib.request.Request(
-        url,
-        data=data,
-        headers={'Content-Type': 'application/json', 'User-Agent': 'ForestWatch-Alert/1.0'},
-        method='POST',
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            return 200 <= resp.status < 300, f'HTTP {resp.status}'
-    except urllib.error.HTTPError as exc:
-        return False, f'HTTP {exc.code}'
     except Exception as exc:
         return False, str(exc)[:240]
 
@@ -138,10 +119,8 @@ def _execute_dispatch(alert_id, station_id, base_url, is_test=False, profile_id=
     dets = (alert.analysis.detections or []) if alert else [{'confidence': 0.88, 'mask_coverage': 4.5}]
     max_conf = max((float(d.get('confidence') or 0) for d in dets), default=0.0)
     max_cov = max((float(d.get('mask_coverage') or 0) for d in dets), default=0.0)
-    detail_link = f"{base_url.rstrip('/')}{reverse('detail', args=[alert.analysis_id])}" if (alert and base_url) else ''
-    maps_link = station.maps_url() if station else ''
-    loc_line = f'📍 Vị trí: {station.location_name}\n' if (station and station.location_name) else ''
-    map_line = f'🗺 Bản đồ: {maps_link}\n' if maps_link else ''
+    effective_base = (getattr(settings, 'PUBLIC_BASE_URL', '') or base_url or '').strip().rstrip('/')
+    detail_link = f"{effective_base}{reverse('detail', args=[alert.analysis_id])}" if (alert and effective_base) else ''
     link_line = f'🔗 Xem & Xác minh: {detail_link}\n' if detail_link else ''
     test_tag = '[KIỂM THỬ] ' if is_test else ''
 
@@ -151,13 +130,12 @@ def _execute_dispatch(alert_id, station_id, base_url, is_test=False, profile_id=
         caption = (
             f'🚨 <b>{test_tag}CẢNH BÁO PHÁT HIỆN KHÓI RỪNG</b>\n'
             f'📷 <b>Nguồn:</b> {source_name}\n'
-            f'{loc_line}'
             f'📊 <b>Độ tin cậy:</b> {round(max_conf * 100, 1)}% · <b>Vùng khói:</b> {round(max_cov, 2)}%\n'
             f'⏰ <b>Thời gian:</b> {timestamp_str}\n'
-            f'{map_line}{link_line}'
+            f'{link_line}'
         )
         ok, detail = _send_telegram_photo(
-            bot_token=profile.telegram_bot_token,
+            bot_token=effective_telegram_token(profile),
             chat_id=profile.telegram_chat_id,
             caption=caption,
             photo_bytes=photo_bytes,
@@ -175,7 +153,7 @@ def _execute_dispatch(alert_id, station_id, base_url, is_test=False, profile_id=
             f'{test_tag}Cảnh báo phát hiện khói rừng\n'
             f'Nguồn: {source_name}\nThời gian: {timestamp_str}\n'
             f'Độ tin cậy: {round(max_conf * 100, 1)}% | Vùng khói: {round(max_cov, 2)}%\n'
-            f'{map_line}{link_line}'
+            f'{link_line}'
         )
         img_tag = '<p><img src="cid:smoke_evidence" style="max-width:640px;border-radius:8px;"></p>' if photo_bytes else ''
         html_body = (
@@ -184,7 +162,6 @@ def _execute_dispatch(alert_id, station_id, base_url, is_test=False, profile_id=
             f'<p><b>Nguồn giám sát:</b> {source_name}</p>'
             f'<p><b>Thời gian:</b> {timestamp_str}</p>'
             f'<p><b>Độ tin cậy AI:</b> {round(max_conf * 100, 1)}% · <b>Độ phủ khói:</b> {round(max_cov, 2)}%</p>'
-            f'{f"<p><b>Vị trí bản đồ:</b> <a href={maps_link}>{maps_link}</a></p>" if maps_link else ""}'
             f'{f"<p><a href={detail_link} style=color:#10b981;font-weight:bold;>Mở trang xác minh cảnh báo ↗</a></p>" if detail_link else ""}'
             f'{img_tag}</div>'
         )
@@ -199,35 +176,13 @@ def _execute_dispatch(alert_id, station_id, base_url, is_test=False, profile_id=
         )
         results.append({'channel': 'Email', 'ok': ok, 'detail': detail})
 
-    if profile.webhook_enabled and profile.webhook_url:
-        payload = {
-            'event': 'smoke_test' if is_test else 'smoke_detected',
-            'content': f'🚨 {test_tag}Phát hiện khói tại **{source_name}** ({round(max_conf * 100, 1)}%) lúc {timestamp_str}',
-            'camera_name': source_name,
-            'location': station.location_name if station else '',
-            'latitude': station.latitude if station else None,
-            'longitude': station.longitude if station else None,
-            'maps_url': maps_link,
-            'confidence': round(max_conf, 3),
-            'mask_coverage': round(max_cov, 2),
-            'detail_url': detail_link,
-            'timestamp': timestamp_str,
-        }
-        ok, detail = _send_webhook_alert(webhook_url=profile.webhook_url, payload=payload)
-        NotificationLog.objects.create(
-            owner=owner, alert=alert, channel=NotificationLog.Channel.WEBHOOK,
-            status=NotificationLog.DeliveryStatus.SENT if ok else NotificationLog.DeliveryStatus.FAILED,
-            target=profile.webhook_url[:255], detail=detail,
-        )
-        results.append({'channel': 'Webhook', 'ok': ok, 'detail': detail})
-
     return results
 
 
 def dispatch_alert_notifications(alert: Alert, *, station=None, base_url: str = '', source_key: str = '', sync: bool = False):
     """Queue asynchronous out-of-app alerts while respecting per-source cooldown."""
     profile = MonitoringProfile.for_user(alert.analysis.owner)
-    if not (profile.telegram_enabled or profile.email_enabled or profile.webhook_enabled):
+    if not (profile.telegram_enabled or profile.email_enabled):
         return False
 
     cooldown = max(5, int(profile.alert_cooldown_seconds or 60))

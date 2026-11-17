@@ -4,7 +4,6 @@ import io
 import json
 import logging
 from math import isfinite
-from pathlib import Path
 from time import perf_counter
 from urllib.parse import quote
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -24,7 +23,6 @@ from django.views.decorators.http import require_GET, require_POST
 from PIL import Image
 from .forms import UploadForm, process_pil_image, fetch_image_from_url
 from .inference import (
-    EVIDENCE_CONFIDENCE,
     SMOKE_LABELS,
     apply_exclusion_zones,
     current_model_name,
@@ -35,7 +33,6 @@ from .inference import (
 )
 from .live_cameras import (
     LiveCameraError,
-    fetch_fire_weather_risk,
     fetch_live_station_frame,
     parse_exclusion_zones,
 )
@@ -55,6 +52,12 @@ from .notifications import (
     send_test_notification,
 )
 from .smoke_events import capture_summary, event_summary, purge_source_alerts, track_smoke
+from .telegram_bot import (
+    check_pairing_status,
+    discover_custom_chats,
+    resolve_bot_username,
+    start_pairing,
+)
 from .video_sources import relay_source, resolve_source, serve_demo_stream
 from .auth_views import (
     register,
@@ -72,6 +75,11 @@ def context():
     return {'mode': settings.INFERENCE_MODE, 'model_name': model_name,
             'reference_enabled': settings.INFERENCE_MODE == 'fosp' and model_name.lower().startswith('e3_concat')}
 
+
+def _public_base_url(request):
+    """Prefer configured PUBLIC_BASE_URL (e.g. Tailscale HTTPS) over the request host."""
+    return (settings.PUBLIC_BASE_URL or request.build_absolute_uri('/').rstrip('/')).rstrip('/')
+
 @login_required
 def dashboard(request):
     runs = Analysis.objects.filter(owner=request.user)
@@ -80,59 +88,17 @@ def dashboard(request):
         'total': runs.count(), 'pending': alerts.filter(status='PENDING').count(),
         'confirmed': alerts.filter(status='CONFIRMED').count(), 'alert_count': alerts.count()})
 
-def _load_sample_case_image(sample_case: str):
-    """Load a built-in real field frame for 1-click single-image analysis during presentations."""
-    presets = {
-        'windy_smoke': ('wSp-pUDcFQI', 20.0, 'Mẫu Thực Địa 01 · Trạm Bắc (Windy Fire)'),
-        'coyote_early': ('TtUgnRqARUE', 12.0, 'Mẫu Thực Địa 02 · Khói Sớm (Coyote Fire 12s)'),
-        'dixie_smoke': ('RWoYegPgRF4', 20.0, 'Mẫu Thực Địa 03 · Trạm Đông (Dixie Fire)'),
-        'clean_forest': (None, 0.0, 'Mẫu Đối Chứng Âm Tính · Rừng Xanh An Toàn'),
-    }
-    if sample_case not in presets:
-        return None, None
-    vid_id, sec, label = presets[sample_case]
-    if vid_id is None:
-        forest_path = settings.BASE_DIR.parent / 'frontend' / 'static' / 'img' / 'forest.jpg'
-        with Image.open(forest_path) as img:
-            return img.convert('RGB').resize((640, 360), Image.Resampling.BILINEAR), label
-    stream_path = Path(settings.MEDIA_ROOT) / 'demo_streams' / f'{vid_id}.mp4'
-    if stream_path.is_file():
-        try:
-            import cv2
-            cap = cv2.VideoCapture(str(stream_path))
-            cap.set(cv2.CAP_PROP_POS_MSEC, sec * 1000.0)
-            ok, frame = cap.read()
-            cap.release()
-            if ok:
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                return Image.fromarray(rgb).resize((640, 360), Image.Resampling.BILINEAR), label
-        except Exception:
-            pass
-    forest_path = settings.BASE_DIR.parent / 'frontend' / 'static' / 'img' / 'forest.jpg'
-    with Image.open(forest_path) as img:
-        return img.convert('RGB').resize((640, 360), Image.Resampling.BILINEAR), label
-
 
 @login_required
 @require_POST
 def analyze(request):
-    sample_case = (request.POST.get('sample_case') or '').strip()
-    if sample_case:
-        sample_img, sample_source = _load_sample_case_image(sample_case)
-        if sample_img is None:
-            messages.error(request, 'Mẫu kiểm thử không hợp lệ.')
-            return redirect('dashboard')
-        normalized_image = sample_img
-        source_name = request.POST.get('source', '').strip() or sample_source
-        simulate = sample_case != 'clean_forest' and settings.INFERENCE_MODE == 'demo'
-    else:
-        form = UploadForm(request.POST, request.FILES)
-        if not form.is_valid():
-            messages.error(request, ' '.join(str(e) for errors in form.errors.values() for e in errors))
-            return redirect('dashboard')
-        normalized_image = form.normalized_image
-        source_name = form.cleaned_data['source']
-        simulate = form.cleaned_data.get('simulate_smoke', False)
+    form = UploadForm(request.POST, request.FILES)
+    if not form.is_valid():
+        messages.error(request, ' '.join(str(e) for errors in form.errors.values() for e in errors))
+        return redirect('dashboard')
+    normalized_image = form.normalized_image
+    source_name = form.cleaned_data['source']
+    simulate = form.cleaned_data.get('simulate_smoke', False)
     started = perf_counter()
     try:
         detections, annotated = predict(
@@ -170,15 +136,26 @@ def analyze(request):
     if created_alert:
         dispatch_alert_notifications(
             created_alert,
-            base_url=request.build_absolute_uri('/'),
+            base_url=_public_base_url(request),
             source_key=str(run.source),
         )
     return redirect('detail', pk=run.pk)
 
 @login_required
 def detail(request, pk):
+    run = (
+        Analysis.objects.select_related('alert__smoke_event')
+        .filter(pk=pk, owner=request.user)
+        .first()
+    )
+    if run is None:
+        return render(
+            request,
+            'run_not_found.html',
+            {**context(), 'run_id': str(pk)},
+            status=404,
+        )
     _ensure_captures_for_user(request.user)
-    run = get_object_or_404(Analysis.objects.select_related('alert__smoke_event'), pk=pk, owner=request.user)
     alert = getattr(run, 'alert', None)
     event = getattr(alert, 'smoke_event', None)
     captures = list(SmokeCapture.objects.filter(owner=request.user, alert=alert).order_by('-created_at')[:60]) if alert else []
@@ -557,7 +534,6 @@ def screen_reports_api(request):
         captures_qs = captures_qs.filter(alert_id=alert_id)
         alerts_qs = alerts_qs.filter(pk=alert_id)
 
-    total_captures = captures_qs.count()
     total_alerts = alerts_qs.count()
     captures_list = list(captures_qs[:100])
     alerts_list = list(alerts_qs[:30])
@@ -630,7 +606,7 @@ def scan_frame(request):
     raw_uuid = None
     kind = request.POST.get('source_kind')
     position = None
-    valid_kinds = {'image', 'video', 'url', 'webcam', 'phone', 'simulator', 'rtsp', 'hls', 'http_snapshot'}
+    valid_kinds = {'image', 'video', 'url', 'rtsp', 'hls'}
     if raw_source_key:
         try:
             raw_uuid = UUID(raw_source_key)
@@ -651,10 +627,6 @@ def scan_frame(request):
         station = CameraStation.objects.filter(pk=station_id, owner=request.user).first()
     if station is None and raw_uuid is not None:
         station = CameraStation.objects.filter(owner=request.user, source_key=raw_uuid).first()
-
-    # Check simulator smoke flag in demo mode
-    if not simulate_smoke and kind == 'simulator' and station and settings.INFERENCE_MODE == 'demo':
-        simulate_smoke = bool(cache.get(f'sim_smoke:{station.pk}'))
 
     image = None
     if 'image' in request.FILES:
@@ -761,7 +733,7 @@ def scan_frame(request):
     evidence_url = None
     event = None
     event_created = False
-    is_live_stream = kind in {'simulator', 'rtsp', 'http_snapshot', 'phone', 'webcam'} or (
+    is_live_stream = kind == 'rtsp' or (
         station is not None and any(sid in (station.stream_url or '') for sid in ('wSp-pUDcFQI', 'RWoYegPgRF4', 'TtUgnRqARUE', 'FZNDqZJvc5w'))
     )
     capture_interval = int(profile.capture_interval_seconds or (8 if is_live_stream else 0))
@@ -799,7 +771,7 @@ def scan_frame(request):
             alert_id = str(alert.id)
         evidence_url = reverse('detail', args=[run.pk])
 
-    # Update live camera station status & dispatch Telegram/Email/Webhook alerts
+    # Update live camera station status & dispatch Telegram/Email alerts
     if station:
         station.last_heartbeat_at = timezone.now()
         station.last_error = ''
@@ -812,7 +784,7 @@ def scan_frame(request):
             dispatch_alert_notifications(
                 alert_obj,
                 station=station,
-                base_url=request.build_absolute_uri('/'),
+                base_url=_public_base_url(request),
                 source_key=str(source_key or source),
             )
 
@@ -843,20 +815,12 @@ def _serialize_station(station: CameraStation):
         'channel_number': station.channel_number,
         'source_key': station.source_key.hex,
         'name': station.name,
-        'location_name': station.location_name,
         'source_type': station.source_type,
         'stream_url': station.masked_stream_url(),
-        'simulator_scenario': station.simulator_scenario,
-        'latitude': station.latitude,
-        'longitude': station.longitude,
-        'azimuth': station.azimuth,
-        'fov_degrees': station.fov_degrees,
-        'range_km': station.range_km,
         'exclusion_zones': station.exclusion_zones or [],
         'status': station.status,
         'last_heartbeat': timezone.localtime(station.last_heartbeat_at).strftime('%H:%M:%S %d/%m') if station.last_heartbeat_at else None,
         'last_error': station.last_error,
-        'maps_url': station.maps_url(),
         'live_frame_url': reverse('live_camera_frame', args=[station.pk]),
         'active_alert_url': reverse('detail', args=[open_event.alert.analysis_id]) if open_event else None,
     }
@@ -882,7 +846,7 @@ def stations_api(request):
         return JsonResponse({'message': 'Số kênh camera không hợp lệ.'}, status=400)
 
     name = str(payload.get('name') or f'CAM {channel_number:02d}').strip()[:120]
-    source_type = str(payload.get('source_type') or 'video').strip()
+    source_type = str(payload.get('source_type') or 'url').strip()
     if source_type not in CameraStation.SourceType.values:
         return JsonResponse({'message': 'Loại nguồn camera không hợp lệ.'}, status=400)
 
@@ -892,10 +856,6 @@ def stations_api(request):
 
     station.name = name
     station.source_type = source_type
-    station.location_name = str(payload.get('location_name', station.location_name or '')).strip()[:160]
-    scenario = str(payload.get('simulator_scenario', station.simulator_scenario or 'smoke_rise')).strip()
-    if scenario in CameraStation.SimulatorScenario.values:
-        station.simulator_scenario = scenario
 
     if 'source_key' in payload and payload.get('source_key'):
         try:
@@ -906,31 +866,8 @@ def stations_api(request):
     raw_stream = str(payload.get('stream_url', '')).strip()
     if raw_stream and ':****@' not in raw_stream:
         station.stream_url = raw_stream[:1000]
-    elif source_type not in ('rtsp', 'hls', 'http_snapshot', 'url'):
+    elif source_type not in ('rtsp', 'hls', 'url'):
         station.stream_url = ''
-
-    for coord_field, min_v, max_v in (('latitude', -90.0, 90.0), ('longitude', -180.0, 180.0)):
-        if coord_field in payload:
-            raw_c = str(payload.get(coord_field, '')).strip()
-            if raw_c == '':
-                setattr(station, coord_field, None)
-            else:
-                try:
-                    val = float(raw_c)
-                    if not isfinite(val) or val < min_v or val > max_v:
-                        raise ValueError
-                    setattr(station, coord_field, round(val, 6))
-                except ValueError:
-                    return JsonResponse({'message': f'Giá trị {coord_field} không hợp lệ.'}, status=400)
-
-    for num_field, min_v, max_v, default_v in (('azimuth', 0.0, 360.0, 0.0), ('fov_degrees', 10.0, 360.0, 60.0), ('range_km', 0.2, 50.0, 5.0)):
-        if num_field in payload and str(payload.get(num_field, '')).strip() != '':
-            try:
-                val = float(payload.get(num_field))
-                if isfinite(val):
-                    setattr(station, num_field, max(min_v, min(max_v, val)))
-            except (TypeError, ValueError):
-                setattr(station, num_field, default_v)
 
     if 'exclusion_zones' in payload:
         zones_raw = payload.get('exclusion_zones')
@@ -960,7 +897,7 @@ def station_detail_api(request, pk):
 @login_required
 @require_GET
 def live_camera_frame(request, pk):
-    """Fetch a live JPEG frame from a CameraStation (Simulator, RTSP, or HTTP Snapshot)."""
+    """Fetch a live JPEG frame from an RTSP CameraStation."""
     station = get_object_or_404(CameraStation, pk=pk, owner=request.user)
     try:
         jpeg_bytes, tag = fetch_live_station_frame(station)
@@ -986,41 +923,6 @@ def live_camera_frame(request, pk):
 
 
 @login_required
-def map_view(request):
-    """Tactical GIS Wildfire Map & Fire Weather Danger Risk view."""
-    stations = list(CameraStation.objects.filter(owner=request.user).order_by('channel_number'))
-    serialized = [_serialize_station(s) for s in stations]
-    geo_stations = [s for s in stations if s.latitude is not None and s.longitude is not None]
-    if geo_stations:
-        center_lat = sum(s.latitude for s in geo_stations) / len(geo_stations)
-        center_lon = sum(s.longitude for s in geo_stations) / len(geo_stations)
-    else:
-        # Default central Vietnam forest coordinates (Phong Nha / Bach Ma region)
-        center_lat, center_lon = 16.20, 107.85
-    weather = fetch_fire_weather_risk(center_lat, center_lon)
-    recent_alerts = Alert.objects.filter(analysis__owner=request.user).select_related('analysis', 'analysis__station')[:15]
-    return render(request, 'map.html', {
-        **context(),
-        'stations': serialized,
-        'weather': weather,
-        'center_lat': center_lat,
-        'center_lon': center_lon,
-        'recent_alerts': recent_alerts,
-    })
-
-
-@login_required
-@require_GET
-def weather_risk_api(request):
-    try:
-        lat = float(request.GET.get('lat', 16.20))
-        lon = float(request.GET.get('lon', 107.85))
-    except (TypeError, ValueError):
-        return JsonResponse({'message': 'Tọa độ không hợp lệ.'}, status=400)
-    return JsonResponse(fetch_fire_weather_risk(lat, lon))
-
-
-@login_required
 def settings_view(request):
     """Enterprise configuration: AI sensitivity, false-positive persistence, notifications, and retention."""
     profile = MonitoringProfile.for_user(request.user)
@@ -1041,6 +943,11 @@ def settings_view(request):
         if action == 'cleanup_now':
             deleted = cleanup_old_captures(owner=request.user, retention_days=profile.retention_days)
             messages.success(request, f'Đã dọn dẹp {deleted} ảnh quét cũ quá {profile.retention_days} ngày.')
+            return redirect('settings')
+        if action == 'use_system_bot':
+            profile.telegram_bot_token = ''
+            profile.save(update_fields=['telegram_bot_token'])
+            messages.success(request, 'Đã chuyển về sử dụng Bot Telegram mặc định của hệ thống.')
             return redirect('settings')
 
         # Save standard settings fields
@@ -1067,16 +974,12 @@ def settings_view(request):
 
         profile.email_enabled = request.POST.get('email_enabled') in ('on', '1', 'true')
         profile.email_recipients = request.POST.get('email_recipients', '').strip()[:500]
-
-        profile.webhook_enabled = request.POST.get('webhook_enabled') in ('on', '1', 'true')
-        profile.webhook_url = request.POST.get('webhook_url', '').strip()[:500]
-        profile.notify_on_offline = request.POST.get('notify_on_offline') in ('on', '1', 'true')
         profile.save()
 
         if action == 'test_notify':
-            test_results = send_test_notification(profile, base_url=request.build_absolute_uri('/'))
+            test_results = send_test_notification(profile, base_url=_public_base_url(request))
             if not test_results:
-                messages.warning(request, 'Vui lòng bật ít nhất một kênh (Telegram, Email hoặc Webhook) trước khi gửi thử.')
+                messages.warning(request, 'Vui lòng bật ít nhất một kênh (Telegram hoặc Email) trước khi gửi thử.')
             else:
                 ok_count = sum(1 for r in test_results if r['ok'])
                 messages.info(request, f'Đã kiểm tra {len(test_results)} kênh thông báo: {ok_count}/{len(test_results)} thành công.')
@@ -1087,16 +990,64 @@ def settings_view(request):
     logs = NotificationLog.objects.filter(owner=request.user)[:20]
     capture_total = SmokeCapture.objects.filter(owner=request.user).count()
     stations = CameraStation.objects.filter(owner=request.user).order_by('channel_number')
-    masked_token = ('****' + profile.telegram_bot_token[-6:]) if len(profile.telegram_bot_token) > 8 else profile.telegram_bot_token
+    system_token = (getattr(settings, 'TELEGRAM_BOT_TOKEN', '') or '').strip()
+    has_system_bot = bool(system_token)
+    system_bot_username = resolve_bot_username(system_token, fetch=False)[1] if system_token else ''
+    using_custom_bot = bool(profile.telegram_bot_token and profile.telegram_bot_token != system_token)
+    display_token = profile.telegram_bot_token if using_custom_bot else ''
+    masked_token = ('****' + display_token[-6:]) if len(display_token) > 8 else display_token
     return render(request, 'settings.html', {
         **context(),
         'profile': profile,
         'masked_token': masked_token,
+        'has_system_bot': has_system_bot,
+        'system_bot_username': system_bot_username,
+        'using_custom_bot': using_custom_bot,
         'logs': logs,
         'capture_total': capture_total,
         'stations': stations,
         'test_results': test_results,
     })
+
+
+def _parse_json_or_post(request):
+    if request.content_type and 'application/json' in request.content_type:
+        try:
+            return json.loads(request.body.decode('utf-8') or '{}')
+        except (ValueError, UnicodeDecodeError):
+            return {}
+    return request.POST
+
+
+@login_required
+@require_POST
+def telegram_pair_start_api(request):
+    """Generate a single-use Telegram /start deep link & group command for the current user."""
+    data = _parse_json_or_post(request)
+    mode = str(data.get('mode') or 'auto').strip()
+    custom_token = str(data.get('bot_token') or '').strip()[:160]
+    ok, result = start_pairing(request.user, mode=mode, custom_token=custom_token)
+    return JsonResponse(result, status=200 if ok else 400)
+
+
+@login_required
+@require_GET
+def telegram_pair_status_api(request):
+    """Check whether the user has completed Telegram /start pairing and persist chat_id."""
+    code = request.GET.get('code', '').strip()[:40]
+    ok, result = check_pairing_status(request.user, code)
+    status_code = 200 if ok else (410 if result.get('expired') else 400)
+    return JsonResponse(result, status=status_code)
+
+
+@login_required
+@require_POST
+def telegram_discover_chats_api(request):
+    """Discover recent chats/groups for a user's private custom Bot Token (never for shared system bot)."""
+    data = _parse_json_or_post(request)
+    custom_token = str(data.get('bot_token') or '').strip()[:160]
+    ok, result = discover_custom_chats(request.user, custom_token=custom_token)
+    return JsonResponse(result, status=200 if ok else 400)
 
 
 @login_required
@@ -1105,7 +1056,7 @@ def export_alerts_csv(request):
     """Export verified alerts and evidence metadata to UTF-8 BOM CSV for Excel/compliance audit."""
     status_filter = request.GET.get('status', '').strip()
     source_filter = request.GET.get('source', '').strip()
-    qs = Alert.objects.filter(analysis__owner=request.user).select_related('analysis', 'analysis__station', 'smoke_event').prefetch_related('history__actor')
+    qs = Alert.objects.filter(analysis__owner=request.user).select_related('analysis', 'smoke_event').prefetch_related('history__actor')
     if status_filter in Alert.Status.values:
         qs = qs.filter(status=status_filter)
     if source_filter:
@@ -1116,23 +1067,17 @@ def export_alerts_csv(request):
     response['Content-Disposition'] = f'attachment; filename="forestwatch-alerts-{stamp}.csv"'
     writer = csv.writer(response)
     writer.writerow([
-        'Mã cảnh báo', 'Thời gian phát hiện', 'Nguồn / Camera', 'Vị trí / Tọa độ GPS',
+        'Mã cảnh báo', 'Thời gian phát hiện', 'Nguồn / Camera',
         'Trạng thái', 'Số khung có khói', 'Độ tin cậy tối đa (%)', 'Độ phủ khói (%)',
         'Lịch sử xác minh', 'Liên kết chi tiết',
     ])
-    base = request.build_absolute_uri('/').rstrip('/')
+    base = _public_base_url(request)
     for alert in qs[:1000]:
         run = alert.analysis
-        station = run.station
         ev = getattr(alert, 'smoke_event', None)
         dets = run.detections or []
         max_conf = round(max((float(d.get('confidence') or 0) for d in dets), default=0.0) * 100, 1)
         max_cov = round(max((float(d.get('mask_coverage') or 0) for d in dets), default=0.0), 2)
-        loc = ''
-        if station:
-            loc = station.location_name or ''
-            if station.latitude is not None and station.longitude is not None:
-                loc = f'{loc} ({station.latitude:.5f}, {station.longitude:.5f})'.strip()
         notes = ' | '.join(
             f'{h.actor.username}: {h.old_status}->{h.new_status}' + (f' ({h.note})' if h.note else '')
             for h in alert.history.all()
@@ -1141,7 +1086,6 @@ def export_alerts_csv(request):
             str(alert.pk),
             timezone.localtime(alert.created_at).strftime('%d/%m/%Y %H:%M:%S'),
             run.source,
-            loc or 'Chưa gắn tọa độ',
             alert.get_status_display(),
             ev.positive_samples if ev else 1,
             max_conf,

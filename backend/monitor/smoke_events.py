@@ -256,7 +256,7 @@ def _track_smoke(
 
                 # Respect configurable wall-clock capture interval for live streams unless frame jumps significantly
                 throttled = False
-                peak_margin = 2.0 if kind in ('simulator', 'rtsp', 'http_snapshot', 'phone', 'webcam') else 0.0
+                peak_margin = 2.0 if kind == 'rtsp' else 0.0
                 if not is_duplicate and min_capture_interval_seconds > 0 and score <= event.peak_score + peak_margin:
                     latest_existing = event.captures.order_by('-created_at').first()
                     if latest_existing and (now - latest_existing.created_at).total_seconds() < min_capture_interval_seconds:
