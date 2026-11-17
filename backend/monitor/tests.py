@@ -61,6 +61,19 @@ class WorkflowTests(TestCase):
         self.assertEqual(self.client.get(reverse('evidence', args=[run.pk, 'original'])).status_code, 404)
         self.assertEqual(self.client.post(reverse('transition', args=[alert.pk]), {'status': 'CONFIRMED'}).status_code, 404)
 
+    @override_settings(DEBUG=True)
+    def test_missing_or_other_owner_detail_renders_friendly_404_even_in_debug(self):
+        self.upload()
+        run = Analysis.objects.get()
+        self.client.force_login(self.other)
+        response = self.client.get(reverse('detail', args=[run.pk]))
+        self.assertEqual(response.status_code, 404)
+        body = response.content.decode('utf-8')
+        self.assertIn('Không thể mở phiên phân tích này', body)
+        self.assertIn(self.other.username, body)
+        self.assertNotIn(self.user.username, body)
+        self.assertNotIn('No Analysis matches the given query', body)
+
     def test_invalid_transition_and_get_cannot_mutate(self):
         self.upload()
         alert = Alert.objects.get()

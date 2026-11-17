@@ -2,13 +2,6 @@ from django.contrib import admin
 from django.contrib.auth import views as auth
 from django.urls import path
 from monitor import views
-from monitor.phone_camera import (
-    create_phone_qr,
-    phone_camera_frame,
-    phone_camera_push,
-    phone_camera_share,
-    resolve_phone_camera,
-)
 
 urlpatterns = [
     path('', views.home, name='home'),
@@ -29,20 +22,16 @@ urlpatterns = [
     path('alerts/delete/', views.delete_alerts, name='delete_alerts'),
     path('alerts/<uuid:pk>/transition/', views.transition, name='transition'),
     path('control-room/', views.control_room, name='control_room'),
-    path('map/', views.map_view, name='map'),
     path('settings/', views.settings_view, name='settings'),
-    path('phone-cam/<str:token>/', phone_camera_share, name='phone_camera_share'),
+    path('api/telegram/pair/start/', views.telegram_pair_start_api, name='telegram_pair_start_api'),
+    path('api/telegram/pair/status/', views.telegram_pair_status_api, name='telegram_pair_status_api'),
+    path('api/telegram/discover-chats/', views.telegram_discover_chats_api, name='telegram_discover_chats_api'),
     path('api/scan-frame/', views.scan_frame, name='scan_frame'),
     path('api/screen-reports/', views.screen_reports_api, name='screen_reports_api'),
     path('api/stations/', views.stations_api, name='stations_api'),
     path('api/stations/<uuid:pk>/', views.station_detail_api, name='station_detail_api'),
     path('api/live-camera/frame/<uuid:pk>/', views.live_camera_frame, name='live_camera_frame'),
-    path('api/weather-risk/', views.weather_risk_api, name='weather_risk_api'),
     path('api/video/resolve/', views.resolve_video, name='resolve_video'),
     path('api/video/media/<str:token>/', views.relay_video, name='relay_video'),
     path('api/video/demo-stream/<str:stream_id>/', views.demo_stream, name='demo_stream'),
-    path('api/phone-camera/qr/', create_phone_qr, name='create_phone_qr'),
-    path('api/phone-camera/resolve/', resolve_phone_camera, name='resolve_phone_camera'),
-    path('api/phone-camera/push/<str:token>/', phone_camera_push, name='phone_camera_push'),
-    path('api/phone-camera/frame/<str:token>/', phone_camera_frame, name='phone_camera_frame'),
 ]

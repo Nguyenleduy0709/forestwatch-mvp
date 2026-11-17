@@ -1,6 +1,5 @@
 import os
 import sys
-from ipaddress import IPv4Network
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -24,6 +23,19 @@ _raw_hosts = os.getenv('DJANGO_ALLOWED_HOSTS', '*').strip()
 ALLOWED_HOSTS = [h.strip() for h in _raw_hosts.split(',') if h.strip()]
 if DEBUG and '*' not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append('*')
+for _ts_host in ('.ts.net', 'desktop-gfkd7bi.tailf86836.ts.net', '100.120.244.64', 'localhost', '127.0.0.1'):
+    if _ts_host not in ALLOWED_HOSTS and '*' not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(_ts_host)
+CSRF_TRUSTED_ORIGINS = [
+    'https://*.ts.net',
+    'https://desktop-gfkd7bi.tailf86836.ts.net',
+    'http://*.ts.net',
+    'http://*.ts.net:8000',
+    'http://100.120.244.64:8000',
+    'https://100.120.244.64',
+    *[o.strip() for o in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',') if o.strip()],
+]
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 INSTALLED_APPS = ['django.contrib.admin', 'django.contrib.auth', 'django.contrib.contenttypes',
                  'django.contrib.sessions', 'django.contrib.messages', 'django.contrib.staticfiles', 'monitor']
 MIDDLEWARE = ['django.middleware.security.SecurityMiddleware', 'django.contrib.sessions.middleware.SessionMiddleware',
@@ -36,7 +48,9 @@ TEMPLATES = [{'BACKEND': 'django.template.backends.django.DjangoTemplates', 'DIR
               'django.contrib.auth.context_processors.auth', 'django.contrib.messages.context_processors.messages',
               'monitor.context_processors.auth_options']}}]
 WSGI_APPLICATION = 'forestwatch.wsgi.application'
-DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': os.getenv('DATABASE_PATH', str(BASE_DIR / 'db.sqlite3'))}}
+_db_path = Path(os.getenv('DATABASE_PATH', str(BASE_DIR / 'db' / 'db.sqlite3')))
+_db_path.parent.mkdir(parents=True, exist_ok=True)
+DATABASES = {'default': {'ENGINE': 'django.db.backends.sqlite3', 'NAME': str(_db_path)}}
 AUTH_PASSWORD_VALIDATORS = [{'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
                             {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'}]
 LANGUAGE_CODE = 'vi'
@@ -59,6 +73,9 @@ LOGOUT_REDIRECT_URL = 'home'
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID', '').strip()
 GOOGLE_CLIENT_SECRET = os.getenv('GOOGLE_CLIENT_SECRET', '').strip()
 GOOGLE_OAUTH_REDIRECT_URI = os.getenv('GOOGLE_OAUTH_REDIRECT_URI', '').strip()
+PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL', '').strip().rstrip('/')
+TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '').strip()
+TELEGRAM_BOT_USERNAME = os.getenv('TELEGRAM_BOT_USERNAME', '').strip().lstrip('@')
 DATA_UPLOAD_MAX_MEMORY_SIZE = 12 * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 2 * 1024 * 1024
 INFERENCE_MODE = os.getenv('INFERENCE_MODE', 'fosp').lower()
@@ -71,9 +88,6 @@ FOSP_RUNTIME_DIR = Path(os.getenv('FOSP_RUNTIME_DIR', str(BASE_DIR.parent / '.fo
 FOSP_GATE_TTA = os.getenv('FOSP_GATE_TTA', 'zoom').lower()
 FOSP_GATE_TTA_THRESHOLD = float(os.getenv('FOSP_GATE_TTA_THRESHOLD', '0.3'))
 FOSP_GATE_THRESHOLD = float(os.getenv('FOSP_GATE_THRESHOLD', '0.0' if FOSP_GATE_TTA == 'zoom' else '0.9989'))
-PHONE_CAMERA_NETWORKS = tuple(
-    IPv4Network(value.strip()) for value in os.getenv('PHONE_CAMERA_NETWORKS', '').split(',') if value.strip()
-)
 ALLOW_LAN_CAMERAS = os.getenv('ALLOW_LAN_CAMERAS', '1' if DEBUG else '0') == '1'
 
 _CACHE_DIR = Path(os.getenv('CACHE_DIR', str(BASE_DIR.parent / 'work/cache')))

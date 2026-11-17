@@ -24,9 +24,6 @@ class MonitoringProfile(models.Model):
     telegram_chat_id = models.CharField(max_length=64, blank=True, default='')
     email_enabled = models.BooleanField(default=False)
     email_recipients = models.CharField(max_length=500, blank=True, default='')
-    webhook_enabled = models.BooleanField(default=False)
-    webhook_url = models.URLField(max_length=500, blank=True, default='')
-    notify_on_offline = models.BooleanField(default=True)
 
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -40,23 +37,14 @@ class MonitoringProfile(models.Model):
 
 
 class CameraStation(models.Model):
-    """Server-persisted camera node with geolocation, FOV, RTSP/Simulator source, and ROI exclusion zones."""
+    """Server-persisted camera slot configuration, RTSP/stream source, and ROI exclusion zones."""
 
     class SourceType(models.TextChoices):
+        URL = 'url', 'Liên kết video'
+        VIDEO = 'video', 'Video từ máy'
         RTSP = 'rtsp', 'Camera IP (RTSP)'
         HLS = 'hls', 'Luồng trực tiếp (HLS .m3u8)'
-        HTTP_SNAPSHOT = 'http_snapshot', 'Camera IP (HTTP JPEG)'
-        SIMULATOR = 'simulator', 'Giả lập Live Cam (Test)'
-        VIDEO = 'video', 'Video từ máy'
-        URL = 'url', 'Liên kết video'
         IMAGE = 'image', 'Ảnh tĩnh'
-        PHONE = 'phone', 'Camera điện thoại (QR)'
-        WEBCAM = 'webcam', 'Webcam / USB'
-
-    class SimulatorScenario(models.TextChoices):
-        SMOKE_RISE = 'smoke_rise', 'Khói rừng bùng phát dần'
-        FOG_FALSE_POSITIVE = 'fog_false_positive', 'Sương mù / Mây trôi (Test chống báo giả)'
-        CLEAR_FOREST = 'clear_forest', 'Rừng yên tĩnh 24/7'
 
     class HealthStatus(models.TextChoices):
         IDLE = 'IDLE', 'Chờ kết nối'
@@ -69,19 +57,8 @@ class CameraStation(models.Model):
     channel_number = models.PositiveSmallIntegerField(default=1)
     source_key = models.UUIDField(default=uuid.uuid4, db_index=True)
     name = models.CharField(max_length=120)
-    location_name = models.CharField(max_length=160, blank=True, default='')
-    source_type = models.CharField(max_length=20, choices=SourceType.choices, default=SourceType.VIDEO)
+    source_type = models.CharField(max_length=20, choices=SourceType.choices, default=SourceType.URL)
     stream_url = models.CharField(max_length=1000, blank=True, default='')
-    simulator_scenario = models.CharField(
-        max_length=32, choices=SimulatorScenario.choices, default=SimulatorScenario.SMOKE_RISE
-    )
-
-    # Geospatial telemetry for incident maps & dispatch
-    latitude = models.FloatField(null=True, blank=True)
-    longitude = models.FloatField(null=True, blank=True)
-    azimuth = models.FloatField(default=0.0)
-    fov_degrees = models.FloatField(default=60.0)
-    range_km = models.FloatField(default=5.0)
 
     # Normalized exclusion boxes [{"x": 0.0, "y": 0.0, "w": 1.0, "h": 0.25, "label": "Bầu trời"}]
     exclusion_zones = models.JSONField(default=list, blank=True)
@@ -110,11 +87,6 @@ class CameraStation(models.Model):
         except ValueError:
             pass
         return self.stream_url
-
-    def maps_url(self):
-        if self.latitude is not None and self.longitude is not None:
-            return f'https://maps.google.com/?q={self.latitude:.6f},{self.longitude:.6f}'
-        return ''
 
     def __str__(self):
         return f'CAM {self.channel_number:02d} · {self.name}'
@@ -227,12 +199,11 @@ class SmokeCapture(models.Model):
 
 
 class NotificationLog(models.Model):
-    """Audit log of out-of-app notifications dispatched via Telegram, Email, or Webhook."""
+    """Audit log of out-of-app notifications dispatched via Telegram or Email."""
 
     class Channel(models.TextChoices):
         TELEGRAM = 'telegram', 'Telegram'
         EMAIL = 'email', 'Email'
-        WEBHOOK = 'webhook', 'Webhook'
 
     class DeliveryStatus(models.TextChoices):
         SENT = 'SENT', 'Đã gửi'
